@@ -285,9 +285,14 @@ function writeFileAndWait(filePath, dataToWrite) {
 }
 
 function createEmptyFile(filePath) {
-  fs.writeFile(filePath, '', (err) => {
-    err ? debug(DEBUG_LEVEL.ERROR, `Error creating file: ${filePath}`) : debug(DEBUG_LEVEL.TRACE, `Empty file created: ${filePath}`);
-  });
+  try {
+    // Must be synchronous so the file is fully initialized before the script starts
+    // appending output. Async creation can race and truncate early log lines.
+    fs.writeFileSync(filePath, '', 'utf8');
+    debug(DEBUG_LEVEL.TRACE, `Empty file created: ${filePath}`);
+  } catch (err) {
+    debug(DEBUG_LEVEL.ERROR, `Error creating file: ${filePath} (${err.message})`);
+  }
 }
 
 function deleteFile(filePathToDelete) {

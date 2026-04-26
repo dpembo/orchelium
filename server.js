@@ -4408,13 +4408,14 @@ app.get('/orchestration/execution/details', User.isAuthenticated, asyncHandler(a
         }
 
         // Fetch live logs from database for in-progress execute nodes
+        // on every request so selected-node detail panels can stay current.
         const agents = require('./agents.js');
         for (const node of jobDef.nodes) {
           if (node.type === 'execute' && node.data && node.data.agent) {
             const agentId = node.data.agent;
             const agent = agents.getAgent(agentId);
-            if (agent && (!cachedExecution.scriptOutputs[node.id] || !cachedExecution.scriptOutputs[node.id].stdout)) {
-              // Node is executing or recently completed, try to fetch logs from database
+            if (agent) {
+              // Node is executing or recently completed, fetch latest logs from database
               const jobName = `Orchestration [${jobId}] Execution [${executionId}] Node [${node.id}]`;
               const logKey = `${agent.name}_${jobName}_${executionId}_log`;
               try {
@@ -4430,7 +4431,7 @@ app.get('/orchestration/execution/details', User.isAuthenticated, asyncHandler(a
                       status: 'in-progress'
                     };
                   }
-                  // Add/update the stdout with the live logs
+                  // Always update stdout with the latest persisted log snapshot.
                   cachedExecution.scriptOutputs[node.id].stdout = logContent;
                   logger.info(`[Orchestration Monitor] Fetched live logs for node [${node.id}] - ${logContent.length} bytes from key [${logKey}]`);
                 }

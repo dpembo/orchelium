@@ -853,6 +853,13 @@
 
               if (!selectedNode) {
                 renderOrchestrationInfo();
+              } else {
+                // Update only dynamic fields in-place to avoid full panel re-renders.
+                const updatedInPlace = updateSelectedNodeFieldsInPlace();
+                if (!updatedInPlace) {
+                  // Fallback only if panel structure is missing (for example after template changes).
+                  selectNode(selectedNode, { skipServerRefresh: true, preserveScroll: true });
+                }
               }
               
               updateSummaryPanel();
@@ -1040,12 +1047,15 @@
           }
           // If this node's panel is currently open, update the log textarea live
           if (selectedNode === nodeId) {
-            const logArea = document.querySelector('#detailsContent textarea');
+            const logArea = document.getElementById('selectedNodeOutputLog');
             if (logArea) {
               const wasAtBottom = logArea.scrollTop + logArea.clientHeight >= logArea.scrollHeight - 5;
               logArea.value = log;
               if (wasAtBottom) logArea.scrollTop = logArea.scrollHeight;
             }
+            // Show spinner while live streaming
+            const logSpinner = document.getElementById('logRefreshIndicator');
+            if (logSpinner) logSpinner.style.display = 'inline-block';
           }
         }
       });
@@ -1073,7 +1083,9 @@
         
         updateNodeState(nodeId, 'in-progress');
         if (selectedNode === nodeId) {
-          selectNode(nodeId);
+          if (!updateSelectedNodeFieldsInPlace()) {
+            selectNode(nodeId, { skipServerRefresh: true, preserveScroll: true });
+          }
         }
       });
 
@@ -1114,7 +1126,9 @@
         
         // If detail panel is open for this node, re-render it with updated status
         if (selectedNode === nodeId) {
-          selectNode(nodeId);
+          if (!updateSelectedNodeFieldsInPlace()) {
+            selectNode(nodeId, { skipServerRefresh: true, preserveScroll: true });
+          }
         } else if (!selectedNode) {
           renderOrchestrationInfo();
           updateSummaryPanel();
@@ -1815,14 +1829,16 @@
       selectNode(nodeId);
     };
 
-    async function selectNode(nodeId) {
+    async function selectNode(nodeId, options = {}) {
+      const skipServerRefresh = Boolean(options && options.skipServerRefresh);
+      const preserveScroll = Boolean(options && options.preserveScroll);
       selectedNode = nodeId;
       const node = executionData.nodes.find(n => n.id === nodeId);
 
       if (!node) return;
 
       // If execution is still in progress, refresh nodeScriptOutputs from server before showing panel
-      if (executionData.isInProgress) {
+      if (executionData.isInProgress && !skipServerRefresh) {
         try {
           const url = `/orchestration/execution/details?jobId=${encodeURIComponent(jobId)}&executionId=${encodeURIComponent(executionId)}`;
           const response = await fetch(url, { credentials: 'same-origin' });
@@ -1875,10 +1891,9 @@
       statusIcon = statusInfo.icon;
       statusColor = statusInfo.color;
 
+      let outputContent = '';
       let logHtml = '<p style="color: var(--text-muted); margin: 0;">No output captured</p>';
       if (nodeOutput && (nodeOutput.stdout || nodeOutput.stderr)) {
-        let outputContent = '';
-        
         // Add stdout if present
         if (nodeOutput.stdout) {
           outputContent += nodeOutput.stdout;
@@ -1893,7 +1908,9 @@
           }
         }
         
-        logHtml = `<textarea readonly rows="10" style="font-family: 'Courier New', monospace; width: 100%; height: auto;">${escapeHtml(outputContent)}</textarea>`;
+        logHtml = `<textarea id="selectedNodeOutputLog" readonly rows="10" style="font-family: 'Courier New', monospace; width: 100%; height: auto;">${escapeHtml(outputContent)}</textarea>`;
+      } else {
+        logHtml = '<textarea id="selectedNodeOutputLog" readonly rows="10" style="font-family: \'Courier New\', monospace; width: 100%; height: auto;"></textarea>';
       }
 
       // Format start time and duration from nodeMetrics
@@ -1997,13 +2014,21 @@
       const exitClass = displayExitCode === 0 ? 'exit-code-success' : (displayExitCode === 'N/A' ? '' : 'exit-code-failure');
       exitCodeHtml = `<div class="detail-item">
         <div class="detail-label">Exit Code</div>
-        <div class="detail-value ${exitClass}" style="font-weight: bold;">${displayExitCode}</div>
+        <div id="selectedNodeExitCode" class="detail-value ${exitClass}" style="font-weight: bold;">${displayExitCode}</div>
       </div>`;
 
       let errorHtml = '';
       if (statusInfo.state === 'failed' && node.errorMessage) {
         errorHtml = `<div class="error-message"><strong>Error:</strong> ${escapeHtml(node.errorMessage || 'Unknown error')}</div>`;
       }
+
+      const detailsSection = document.querySelector('.details-section');
+      const existingLogArea = document.querySelector('#detailsContent textarea');
+      const previousPanelScrollTop = detailsSection ? detailsSection.scrollTop : 0;
+      const previousLogScrollTop = existingLogArea ? existingLogArea.scrollTop : 0;
+      const wasLogNearBottom = existingLogArea
+        ? (existingLogArea.scrollTop + existingLogArea.clientHeight >= existingLogArea.scrollHeight - 5)
+        : false;
 
       const html = `
         <div class="detail-header">
@@ -2014,8 +2039,8 @@
           <div class="detail-item">
             <div class="detail-label">Status</div>
             <div class="detail-value" style="display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 1.2em; color: ${statusColor};">${statusIcon}</span>
-              <span>${statusText}</span>
+              <span id="selectedNodeStatusIcon" style="font-size: 1.2em; color: ${statusColor};">${statusIcon}</span>
+              <span id="selectedNodeStatusText">${statusText}</span>
             </div>
           </div>
           <div class="detail-item">
@@ -2041,7 +2066,10 @@
             <div class="detail-value">${parametersHtml}</div>
           </div>
           <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
-            <div class="detail-label" style="margin-bottom: 0;">Output Log</div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 0;">
+              <div class="detail-label" style="margin-bottom: 0;">Output Log</div>
+              <span id="logRefreshIndicator" class="refreshindicator refreshloader" style="display: ${statusInfo.state === 'in-progress' ? 'inline-block' : 'none'};"></span>
+            </div>
             ${logHtml}
           </div>
         </div>
@@ -2064,12 +2092,91 @@
         });
       }
       
-      // Reset scroll to top immediately after content update
-      const detailsSection = document.querySelector('.details-section');
-      detailsSection.scrollTop = 0;
+      // Preserve scroll positions during live refresh re-renders so users can watch logs.
+      if (detailsSection) {
+        if (preserveScroll) {
+          detailsSection.scrollTop = previousPanelScrollTop;
+        } else {
+          detailsSection.scrollTop = 0;
+        }
+      }
+
+      const newLogArea = document.querySelector('#detailsContent textarea');
+      if (preserveScroll && newLogArea) {
+        if (wasLogNearBottom) {
+          newLogArea.scrollTop = newLogArea.scrollHeight;
+        } else {
+          newLogArea.scrollTop = previousLogScrollTop;
+        }
+      }
       
       // Show details panel
       showDetailsPanel();
+    }
+
+    function updateSelectedNodeFieldsInPlace() {
+      if (!selectedNode || !executionData) {
+        return false;
+      }
+
+      const statusIconEl = document.getElementById('selectedNodeStatusIcon');
+      const statusTextEl = document.getElementById('selectedNodeStatusText');
+      const logArea = document.getElementById('selectedNodeOutputLog');
+      const exitCodeEl = document.getElementById('selectedNodeExitCode');
+      const logSpinner = document.getElementById('logRefreshIndicator');
+      if (!statusIconEl || !statusTextEl || !logArea || !exitCodeEl) {
+        return false;
+      }
+
+      const statusInfo = getNodeStatusInfo(selectedNode);
+      statusIconEl.textContent = statusInfo.icon;
+      statusIconEl.style.color = statusInfo.color;
+      statusTextEl.textContent = statusInfo.text;
+
+      if (logSpinner) {
+        logSpinner.style.display = statusInfo.state === 'in-progress' ? 'inline-block' : 'none';
+      }
+
+      let displayExitCode = 'N/A';
+      if (statusInfo.exitCode !== undefined) {
+        displayExitCode = statusInfo.exitCode;
+      }
+
+      const selectedNodeObj = executionData.nodes.find(n => n.id === selectedNode);
+      if (selectedNodeObj && selectedNodeObj.type === 'end-failure' && statusInfo.state === 'failed') {
+        displayExitCode = 9999;
+      }
+
+      exitCodeEl.textContent = displayExitCode;
+      exitCodeEl.classList.remove('exit-code-success', 'exit-code-failure');
+      if (displayExitCode === 0) {
+        exitCodeEl.classList.add('exit-code-success');
+      } else if (displayExitCode !== 'N/A') {
+        exitCodeEl.classList.add('exit-code-failure');
+      }
+
+      const nodeOutput = executionData.nodeScriptOutputs ? executionData.nodeScriptOutputs[selectedNode] : null;
+      let outputContent = '';
+      if (nodeOutput) {
+        if (nodeOutput.stdout) {
+          outputContent += nodeOutput.stdout;
+        }
+        if (nodeOutput.stderr) {
+          if (outputContent) {
+            outputContent += '\n\n--- STDERR ---\n' + nodeOutput.stderr;
+          } else {
+            outputContent += nodeOutput.stderr;
+          }
+        }
+      }
+
+      const wasAtBottom = logArea.scrollTop + logArea.clientHeight >= logArea.scrollHeight - 5;
+      logArea.value = outputContent;
+      if (wasAtBottom) {
+        logArea.scrollTop = logArea.scrollHeight;
+      }
+
+      return true;
     }
 
     function showDetailsPanel() {

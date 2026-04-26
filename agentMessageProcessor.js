@@ -2,6 +2,10 @@ const status_topic = 'orchelium/agent/status';
 const command_topic = 'orchelium/agent/command';
 const EventEmitter = require('events');
 const metricResultEmitter = new EventEmitter();
+
+// Serialize DB log writes per key so concurrent log chunks cannot overwrite
+// each other (for example, two first chunks both seeing NotFound).
+const logWriteQueues = {};
 const scriptTestManager = require('./scriptTestManager.js');
 
 /**
@@ -289,60 +293,46 @@ async function processMessage(topic, message,protocol) {
 
   //Update log record
   async function updateLogRecord(obj){
-    var key = getDbKey(obj,"log");
-    var value;
-   
-    var data;
-    var resp;
-    try{
-      data = await db.simpleGetData(key);
-    }
-    catch (error){
-      //If item doesn't exist add to DB
-      if (error.message.includes('NotFoundError')){
-        try {
-            logger.debug(`No Log record found - creating with key [${key}]`);
-            resp = await db.simplePutData(key,obj.data);
-            logger.debug(`Data created successfully for Key [${key}], Response [${resp}], Data \n${obj.data}`);
-            if (!obj.jobName || !obj.jobName.includes('Orchestration [')) {
-              emitScheduleLogUpdate(obj.jobName, obj.data, obj.executionId);
-            } else {
-              emitOrchestrationNodeLogUpdate(obj.jobName, obj.data);
-            }
-        }
-        catch (insertErr){
-          logger.error(`Unknown Issue creating new entry for key [${key}] to DB`);
-          logger.error(insertErr);
-          throw insertErr;
-        }
-      }
-      else{
-        logger.error(`Unknown Issue searching DB for key [${key}]`);
-        logger.error(error);
-        throw insertErr;
-      }
-    }
+    const key = getDbKey(obj, "log");
+    const previous = logWriteQueues[key] || Promise.resolve();
 
-    if(data!==undefined){
-      logger.debug('Retrieved data:', data);
-      data+=obj.data;
-      try{
-        logger.debug(``)
-        resp = await db.simplePutData(key,data);
-        logger.debug(`Data upadated successfully Key [${key}], Response [${resp}], Data \n${data}`);
-        if (!obj.jobName || !obj.jobName.includes('Orchestration [')) {
-          emitScheduleLogUpdate(obj.jobName, data, obj.executionId);
+    const next = previous.then(async () => {
+      const chunk = obj.data || '';
+      let existingData;
+
+      try {
+        existingData = await db.simpleGetData(key);
+      } catch (error) {
+        if (error.message && error.message.includes('NotFoundError')) {
+          existingData = '';
         } else {
-          emitOrchestrationNodeLogUpdate(obj.jobName, data);
+          logger.error(`Unknown Issue searching DB for key [${key}]`);
+          logger.error(error);
+          throw error;
         }
       }
-      catch (error){
+
+      const updatedData = `${existingData}${chunk}`;
+
+      try {
+        await db.simplePutData(key, updatedData);
+        logger.debug(`Data updated successfully key [${key}] bytes [${updatedData.length}]`);
+      } catch (error) {
         logger.error(`unable to add [${key}] to DB`);
         logger.error(error);
         throw error;
       }
-    }
 
+      if (!obj.jobName || !obj.jobName.includes('Orchestration [')) {
+        emitScheduleLogUpdate(obj.jobName, updatedData, obj.executionId);
+      } else {
+        emitOrchestrationNodeLogUpdate(obj.jobName, updatedData);
+      }
+    });
+
+    // Keep chain alive after failures so future chunks are not blocked forever.
+    logWriteQueues[key] = next.catch(() => {});
+    return next;
   }
 
   function emitOrchestrationNodeLogUpdate(jobName, logData) {
