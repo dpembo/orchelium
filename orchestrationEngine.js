@@ -18,6 +18,9 @@ const pendingExecutions = {};
 // This allows multiple concurrent executions of the same job without cross-talk
 const activeOrchestrationExecutions = {};  // jobId -> { executionIds: Set, latestExecutionId: string }
 
+// Serialize saveExecutionResult writes per jobId to prevent concurrent read-modify-write races
+const saveExecutionQueues = {};  // jobId -> Promise chain
+
 // Event emitter for script completion events
 const scriptCompletionEmitter = new EventEmitter();
 
@@ -322,7 +325,7 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
               startTime: offlineCheckTime,
               endTime: offlineCheckTime
             };
-          } else if (agent.status !== 'online') {
+          } else if (agent.status === 'offline') {
             logger.warn(`[ORCHESTRATION] Agent [${agentId}] is offline (status: ${agent.status}) - skipping execution and continuing orchestration`);
             result = {
               exitCode: 1,
@@ -766,6 +769,16 @@ async function getExecutionHistory(jobId) {
  * @param {Object} executionLog - The execution log to save
  */
 async function saveExecutionResult(executionLog) {
+  const jobId = executionLog.jobId;
+
+  // Serialize writes per jobId to prevent concurrent read-modify-write races
+  const previous = saveExecutionQueues[jobId] || Promise.resolve();
+  const next = previous.then(() => _doSaveExecutionResult(executionLog));
+  saveExecutionQueues[jobId] = next.catch(() => {});  // Keep chain alive even on error
+  return next;
+}
+
+async function _doSaveExecutionResult(executionLog) {
   try {
     let executions = {};
     try {
