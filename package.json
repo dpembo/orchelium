@@ -44,7 +44,7 @@
         "level": "^10.0.0",
         "log4js": "^6.9.1",
         "lusca": "^1.7.0",
-        "marked": "^18.0.4",
+        "marked": "^18.0.5",
         "material-design-icons-iconfont": "^6.7.0",
         "material-icons": "^1.13.14",
         "materialize-css": "^1.0.0",
