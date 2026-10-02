@@ -762,6 +762,10 @@ function isSelected(inValue,compareValue){
               <label for="prop-params">Parameters</label>
               <textarea id="prop-params" placeholder="Enter command parameters or custom command"></textarea>
             </div>
+            <div class="properties-section">
+              <label for="prop-script-timeout">Timeout (ms)</label>
+              <input type="number" id="prop-script-timeout" min="1000" step="1000" placeholder="3600000" title="Script execution timeout in milliseconds">
+            </div>
             </div>
 
             <div id="prop-execute-http-fields" style="display: none;">
@@ -950,6 +954,10 @@ When unchecked (default), execution continues through the graph to a Success or 
             <div class="properties-section">
               <label for="prop-plugin-agent">Agent</label>
               <select id="prop-plugin-agent"></select>
+            </div>
+            <div class="properties-section">
+              <label for="prop-plugin-timeout">Timeout (ms)</label>
+              <input type="number" id="prop-plugin-timeout" min="1000" step="1000" placeholder="300000" title="Plugin execution timeout in milliseconds">
             </div>
             <div id="prop-plugin-fields"></div>
             <div id="prop-plugin-docs-section" style="display: none; margin-top: 12px;">
@@ -2238,6 +2246,7 @@ When unchecked (default), execution continues through the graph to a Success or 
         }
       } else {
         if (!node.icon || node.icon === 'http') node.icon = 'settings';
+        if (!node.data.scriptTimeoutMs) node.data.scriptTimeoutMs = 3600000;
         if (node.data.actionName) {
           node.label = node.data.actionName;
         } else if (!node.label || node.label === 'Execute' || node.label.startsWith('HTTP ')) {
@@ -2374,7 +2383,8 @@ When unchecked (default), execution continues through the graph to a Success or 
           httpAuthType: 'none',
           httpBody: ''
         } : {
-          executeType: 'script'
+          executeType: 'script',
+          scriptTimeoutMs: 3600000
         };
       } else if (resolvedType === 'wait') {
         label = 'Wait 5s';
@@ -2424,7 +2434,7 @@ When unchecked (default), execution continues through the graph to a Success or 
         label = plugin.label || pluginName || 'Plugin';
         icon = 'extension';
         ports = [{ id: 'out', label: 'next', x: CANVAS.nodeWidth / 2, y: CANVAS.nodeHeight }];
-        data = { pluginName: pluginName };
+        data = { pluginName: pluginName, pluginTimeoutMs: 300000 };
       }
       
       nodes[id] = {
@@ -3602,6 +3612,20 @@ When unchecked (default), execution continues through the graph to a Success or 
           node.data.parameters = this.value;
         };
 
+        // Script timeout handling
+        const scriptTimeoutField = document.getElementById('prop-script-timeout');
+        scriptTimeoutField.value = node.data.scriptTimeoutMs || 3600000;
+        
+        scriptTimeoutField.onchange = function() {
+          const timeoutValue = parseInt(this.value, 10);
+          node.data.scriptTimeoutMs = Number.isFinite(timeoutValue) && timeoutValue > 0 ? timeoutValue : 3600000;
+        };
+        
+        scriptTimeoutField.oninput = function() {
+          const timeoutValue = parseInt(this.value, 10);
+          node.data.scriptTimeoutMs = Number.isFinite(timeoutValue) && timeoutValue > 0 ? timeoutValue : 3600000;
+        };
+
         executeTypeSelect.onchange = updateExecuteTypeVisibility;
 
         httpMethod.onchange = function() {
@@ -3891,6 +3915,9 @@ When unchecked (default), execution continues through the graph to a Success or 
           node.data.terminateOnError = terminateChk.checked;
         };
       } else if (node.type === 'plugin') {
+        if (!node.data) node.data = {};
+        if (!node.data.pluginTimeoutMs) node.data.pluginTimeoutMs = 300000;
+        
         const pluginName = node.data?.pluginName || '';
         document.getElementById('prop-plugin-name-display').textContent = pluginName;
 
@@ -3930,6 +3957,20 @@ When unchecked (default), execution continues through the graph to a Success or 
           agentSel.appendChild(opt);
         });
         agentSel.onchange = function() { node.data.agent = agentSel.value; };
+
+        // Plugin timeout handling
+        const pluginTimeoutField = document.getElementById('prop-plugin-timeout');
+        pluginTimeoutField.value = node.data.pluginTimeoutMs || 300000;
+        
+        pluginTimeoutField.onchange = function() {
+          const timeoutValue = parseInt(this.value, 10);
+          node.data.pluginTimeoutMs = Number.isFinite(timeoutValue) && timeoutValue > 0 ? timeoutValue : 300000;
+        };
+        
+        pluginTimeoutField.oninput = function() {
+          const timeoutValue = parseInt(this.value, 10);
+          node.data.pluginTimeoutMs = Number.isFinite(timeoutValue) && timeoutValue > 0 ? timeoutValue : 300000;
+        };
 
         // Build dynamic input fields
         // Helper: check if a field should be visible based on visibleWhen

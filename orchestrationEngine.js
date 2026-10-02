@@ -748,8 +748,9 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
             agentComms.sendCommand(...sendCommandArgs);
 
             logger.debug(`[ORCHESTRATION] About to wait for script completion on node [${currentNode.id}]`);
+            const scriptTimeoutMs = parseInt(currentNode.data?.scriptTimeoutMs, 10) || 3600000;
             const actualStartTime = new Date().toISOString();
-            result = await waitForScriptCompletion(jobName, 300000);
+            result = await waitForScriptCompletion(jobName, scriptTimeoutMs);
             const actualEndTime = new Date().toISOString();
             logger.debug(`[ORCHESTRATION] Script completion received: exitCode=${result.exitCode}`);
 
@@ -1209,8 +1210,9 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
             if (executionLog.triggerContext) sendCommandArgs.push(executionLog.triggerContext, contextEnvVars);
             agentComms.sendCommand(...sendCommandArgs);
 
+            const pluginTimeoutMs = parseInt(currentNode.data?.pluginTimeoutMs, 10) || 300000;
             const actualStartTime = new Date().toISOString();
-            result = await waitForScriptCompletion(jobName, 300000);
+            result = await waitForScriptCompletion(jobName, pluginTimeoutMs);
             result.startTime = actualStartTime;
             result.endTime = new Date().toISOString();
           }
