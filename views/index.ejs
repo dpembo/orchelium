@@ -32,22 +32,62 @@ function outputArray(inArray)
 
   <%- include('./partials/_head'); %>
 
+  <link rel="stylesheet" href="/js/apexcharts/apexcharts.css" />
   <style>
-    /* Card container to manage flex wrapping and spacing */
-    .card-container {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 16px; /* Space between cards */
-      justify-content: flex-start; /* Center the cards in the container */
-      padding: 16px;
-    }
+    .dash { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; padding: 8px 0 24px; }
+    .dash .card { margin: 0; min-width: 0; max-width: none; flex: none; border-radius: 12px; }
+    .dash .card a.cardlink { display: block; color: inherit; }
+    .dash .card-title { font-size: 1.05rem; font-weight: 500; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; }
+    .dash .card-title small { font-size: .75rem; opacity: .6; font-weight: 400; }
+    .dash .card .card-content { padding: 16px 20px; }
 
-    /* Make each card responsive with a min and max width */
-    .card {
-      flex: 1 1 400px; /* Allow cards to grow and shrink with a base width of 300px */
-      min-width: 425px;
-      max-width: 400px; /* Maximum width to prevent cards from stretching too wide */
-      margin: 2px; /* Additional spacing between cards */
+    .kpi { grid-column: span 3; position: relative; overflow: hidden; }
+    .kpi .card-content { display: flex; align-items: center; gap: 14px; }
+    .kpi .kpi-icon { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex: none; }
+    .kpi .kpi-icon i { font-size: 28px; }
+    .kpi .kpi-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em; opacity: .65; }
+    .kpi .kpi-value { font-size: 1.9rem; font-weight: 600; line-height: 1.1; }
+    .kpi .kpi-sub { font-size: .75rem; opacity: .6; }
+    .kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--accent); }
+    .kpi { --accent: #63ade9; }
+    .kpi.good { --accent: #4caf93; } .kpi.bad { --accent: #CF6679; } .kpi.warn { --accent: #ff9800; }
+    .kpi .kpi-icon { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+
+    .p-donut { grid-column: span 4; }
+    .p-exec { grid-column: span 8; }
+    .p-recent { grid-column: span 5; }
+    .p-runtime { grid-column: span 4; }
+    .p-agents { grid-column: span 3; }
+
+    .run-list { list-style: none; margin: 0; padding: 0; }
+    .run-list li { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(128,128,128,.2); }
+    .run-list li:last-child { border-bottom: 0; }
+    .run-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+    .run-dot.success { background: #4caf93; } .run-dot.fail { background: #CF6679; } .run-dot.running { background: #ff9800; }
+    .run-main { flex: 1; min-width: 0; }
+    .run-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run-meta { font-size: .75rem; opacity: .6; }
+    .run-badge { font-size: .7rem; padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(128,128,128,.4); flex: none; }
+    .run-time { font-variant-numeric: tabular-nums; font-size: .85rem; opacity: .8; flex: none; min-width: 52px; text-align: right; }
+    .empty-note { opacity: .6; padding: 24px 0; text-align: center; }
+
+    .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid rgba(128,128,128,.2); }
+    .stat-row:last-child { border-bottom: 0; }
+    .sched-bar { height: 8px; border-radius: 4px; background: rgba(128,128,128,.25); overflow: hidden; display: flex; margin-bottom: 14px; }
+    .sched-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .sched-tile { display: flex; flex-direction: column; align-items: flex-start; padding: 10px 12px; border-radius: 10px; border-left: 3px solid var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+    .sched-tile i { font-size: 18px; color: var(--c); }
+    .sched-num { font-size: 1.7rem; font-weight: 600; line-height: 1.15; }
+    .sched-lbl { font-size: .7rem; text-transform: uppercase; letter-spacing: .08em; opacity: .65; }
+    .sched-bar span { display: block; height: 100%; }
+
+    @media (max-width: 1200px) {
+      .kpi { grid-column: span 6; }
+      .p-donut, .p-exec, .p-recent, .p-runtime, .p-agents { grid-column: span 12; }
+      .p-recent, .p-runtime { grid-column: span 6; }
+    }
+    @media (max-width: 700px) {
+      .kpi, .p-recent, .p-runtime { grid-column: span 12; }
     }
   </style>
   
@@ -61,202 +101,209 @@ function outputArray(inArray)
 
         <!--   Icon Section   -->
 
-        <div class="row">
-          <div class="col s12 m12 l12">
+        <div class="row" style="margin-bottom:0">
+          <div class="col s12">
             <h5>Welcome <%=username%></h5>
           </div>
         </div>
+<%
+  var totalDone = successCount + failCount;
+  var successPct = totalDone > 0 ? Math.round((successCount / totalDone) * 1000) / 10 : 0;
+  var schedDone = parseInt(todayJobsRun.scheduledCount) || 0;
+  var schedFail = parseInt(todayJobsRun.scheduledFail) || 0;
+  var schedTotal = parseInt(todayJobs) || 0;
+  var schedPct = schedTotal > 0 ? Math.min(100, Math.round(((schedDone + schedFail) / schedTotal) * 100)) : 0;
+  var schedOkW = schedTotal > 0 ? Math.min(100, (schedDone / schedTotal) * 100) : 0;
+  var schedFailW = schedTotal > 0 ? Math.min(100 - schedOkW, (schedFail / schedTotal) * 100) : 0;
+  var totalAgents = agentOnline + agentOffline + agentRunning + agentUnknown;
+  function fmtRuntime(s) {
+    s = Math.round(s || 0);
+    if (s < 60) return s + 's';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + 'm ' + (s % 60) + 's';
+    return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
+  }
+%>
+        <div class="dash">
 
-
-        <!-- Card container to enable responsive card wrapping -->
-        <div class="card-container">
-          <div class="card">
-            <a href="history.html">
-              <div class="card-content">
-                <span class="card-title">Job Status</span>
-                <canvas height="250" id="donutChart"></canvas>
-              </div>
-            </a>
+          <!-- KPI strip -->
+          <div class="card kpi <%= failCount > 0 ? 'warn' : 'good' %>">
+            <a class="cardlink" href="history.html"><div class="card-content">
+              <div class="kpi-icon"><i class="material-icons">check_circle</i></div>
+              <div><div class="kpi-label">7-day success</div><div class="kpi-value"><%= successPct %>%</div><div class="kpi-sub"><%= successCount %> ok / <%= failCount %> failed</div></div>
+            </div></a>
+          </div>
+          <div class="card kpi <%= runningCount > 0 ? 'warn' : '' %>">
+            <a class="cardlink" href="history.html"><div class="card-content">
+              <div class="kpi-icon"><i class="material-icons">autorenew</i></div>
+              <div><div class="kpi-label">Running now</div><div class="kpi-value"><%= runningCount %></div><div class="kpi-sub">active executions</div></div>
+            </div></a>
+          </div>
+          <div class="card kpi <%= (agentOffline > 0) ? 'bad' : 'good' %>">
+            <a class="cardlink" href="/agentstatus.html"><div class="card-content">
+              <div class="kpi-icon"><i class="material-icons">dns</i></div>
+              <div><div class="kpi-label">Agents online</div><div class="kpi-value"><%= agentOnline + agentRunning %><span style="font-size:1rem;opacity:.6"> / <%= totalAgents %></span></div><div class="kpi-sub"><%= agentOffline %> offline</div></div>
+            </div></a>
+          </div>
+          <div class="card kpi">
+            <a class="cardlink" href="/scheduleListCalendar.html?viewType=daily"><div class="card-content">
+              <div class="kpi-icon"><i class="material-icons">schedule</i></div>
+              <div><div class="kpi-label">Scheduled today</div><div class="kpi-value"><%= schedTotal %></div><div class="kpi-sub"><%= schedDone + schedFail %> completed</div></div>
+            </div></a>
           </div>
 
-          <div class="card">
-            <a href="history.html">
-              <div class="card-content">
-                <span class="card-title">Executions</span>
-                <canvas height="250" id="lineGraph"></canvas>
-              </div>
-            </a>
+          <!-- Charts -->
+          <div class="card p-donut">
+            <div class="card-content">
+              <span class="card-title">Job Status <small>last 7 days</small></span>
+              <div id="donutChart"></div>
+            </div>
           </div>
 
-          <div class="card">
-            <a href="history.html">
-              <div class="card-content">
-                <span class="card-title">Runtime (secs)</span>
-                <canvas height="250" id="areaChart"></canvas>
-              </div>
-            </a>
+          <div class="card p-exec">
+            <div class="card-content">
+              <span class="card-title">Executions <small>stacked, with scheduled</small></span>
+              <div id="execChart"></div>
+            </div>
           </div>
 
-          <!-- Additional cards for other items -->
-          <div class="card">
-            <a href="/agentstatus.html">
-              <div class="card-content">
-                <span class="card-title">Agents</span>
-                <% var offlineClass="offlinecnt"; 
-                  var runningClass="runningcnt";
-                  var onlineClass="onlinecnt";
-                  if(agentOffline==0)offlineClass="unknowncnt";
-                  if(agentOnline==0)onlineClass="offlinecnt";
-                  if(agentRunning==0)runningClass="unknowncnt";
-                %>
-                <div>
-                  <span class="dashtitle">Online</span><span style="padding-left: 5px" class="<%=onlineClass%>"><%=agentOnline%></span>
-                  <span class="dashtitle">Offline</span><span class="<%=offlineClass%>"><%=agentOffline%></span>
-                  <span class="dashtitle">Running</span><span class="<%=runningClass%>"><%=agentRunning%></span>
-                  <span class="dashtitle">Unknown</span><span class="unknowncnt"><%=agentUnknown%></span>
+          <!-- Recent executions -->
+          <div class="card p-recent">
+            <div class="card-content">
+              <span class="card-title">Recent Executions <a href="history.html" style="font-size:.8rem">View all</a></span>
+              <% if (recentRuns.length === 0) { %>
+                <div class="empty-note">No executions yet</div>
+              <% } else { %>
+              <ul class="run-list">
+                <% recentRuns.forEach(function(r) { %>
+                <li>
+                  <span class="run-dot <%= r.status %>"></span>
+                  <div class="run-main">
+                    <div class="run-name" title="<%= r.name %>"><%= r.name %></div>
+                    <div class="run-meta"><%= r.when %></div>
+                  </div>
+                  <span class="run-badge"><%= r.type %></span>
+                  <span class="run-time"><%= fmtRuntime(r.runtime) %></span>
+                </li>
+                <% }); %>
+              </ul>
+              <% } %>
+            </div>
+          </div>
+
+          <div class="card p-runtime">
+            <a class="cardlink" href="history.html"><div class="card-content">
+              <span class="card-title">Runtime <small>secs / day</small></span>
+              <div id="runtimeChart"></div>
+            </div></a>
+          </div>
+
+          <div class="card p-agents">
+            <div class="card-content">
+              <a class="cardlink" href="/scheduleListCalendar.html?viewType=daily">
+                <span class="card-title">Today's Schedule <small><%= schedPct %>% done</small></span>
+                <div class="sched-bar"><span style="width:<%= schedOkW %>%;background:#4caf93"></span><span style="width:<%= schedFailW %>%;background:#CF6679"></span></div>
+                <div class="sched-tiles">
+                  <div class="sched-tile" style="--c:#4caf93"><i class="material-icons">check_circle</i><span class="sched-num"><%= schedDone %></span><span class="sched-lbl">Success</span></div>
+                  <div class="sched-tile" style="--c:#CF6679"><i class="material-icons">error</i><span class="sched-num"><%= schedFail %></span><span class="sched-lbl">Failed</span></div>
+                  <div class="sched-tile" style="--c:#b39ddb"><i class="material-icons">event</i><span class="sched-num"><%= schedTotal %></span><span class="sched-lbl">Scheduled</span></div>
+                  <div class="sched-tile" style="--c:#ff9800"><i class="material-icons">hourglass_empty</i><span class="sched-num"><%= Math.max(0, schedTotal - schedDone - schedFail) %></span><span class="sched-lbl">Remaining</span></div>
                 </div>
-              </div>
-            </a>
+              </a>
+            </div>
           </div>
 
-          <div class="card">
-            <a href="/scheduleListCalendar.html?viewType=daily">
-              <div class="card-content">
-                <span class="card-title">Day Schedule</span>
-                <% var color = "unknowncnt";
-                  var jrunSuccess = parseInt(todayJobsRun.scheduledCount);
-                  var jrunFail = parseInt(todayJobsRun.scheduledFail);
-                  var jobs = parseInt(todayJobs);
-                  if((jrunSuccess + jrunFail) < jobs) color="offlinecnt";
-                  if((jrunSuccess + jrunFail) == jobs) color="onlinecnt";
-                  if((jrunSuccess + jrunFail) > jobs) color="unknowncnt";
-                %>
-                <span class="onlinecnt dashtitle" style="font-size:8pt;">Success</span>
-                <span class="onlinecnt" style="font-size:36;"><%=jrunSuccess%></span>
-                <span class="unknowncnt" style="font-size:36pt;margin-left:20px;"> / </span>
-                <span class="offlinecnt dashtitle" style="font-size:8pt;margin-left:-25px;">Fail</span>
-                <span class="offlinecnt" style="font-size:36pt;margin-left:10px;"><%=jrunFail%></span>
-                <span class="unknowncnt" style="font-size:36pt;">&nbsp;of&nbsp;</span>
-                <span class="<%= color %>" style="font-size:36pt;"><%= todayJobs %></span>
-              </div>
-            </a>
-          </div>
         </div>
-
-        
-
-        </div>
-        </div>
-        </div>
-        <!-- Add Chart.js script -->
-        <script src="/js/chart.js/chart.min.js"></script>
-        <script>
-          document.addEventListener('DOMContentLoaded', function () {
-            // Get the canvas element
-            var ctx = document.getElementById('donutChart').getContext('2d');
-
-            // Create the donut chart
-            var donutChart = new Chart(ctx, {
-              type: 'doughnut',
-              data: {
-                labels: ['Success', 'Failure', 'Running'],
-                datasets: [{
-                  data: [<%=successCount %>, <%=failCount %>, <%=runningCount %>],
-                  backgroundColor: ['#63ade9', '#CF6679', '#ff9800'],
-                  borderColor: 'transparent',
-                  borderWidth: 1
-                }]
-              },
-              options: {
-                backgroundColor: 'transparent',
-                responsive: true,
-                maintainAspectRatio: true,
-                cutout: '75%', // Adjust the cutout to control the donut shape
-                plugins: {
-                  legend: {
-                    display: true,
-                    position: 'right'
-                  }
-                },
-              }
-            });
-            ctx = document.getElementById('lineGraph').getContext('2d');
-
-            // Create the line graph
-            var lineGraph = new Chart(ctx, {
-              type: 'line',
-              data: {
-                //[<%-outputArray(chartData.labels)%>]
-                labels: [<%-outputArray(chartData.labels)%>],
-                datasets: [
-                  {
-                    label: 'Success',
-                    data: [<%=chartData.success%>],
-                    borderColor: '#63ade9',
-                    fill: false,
-                  },
-                  {
-                    label: 'Fail',
-                    data: [<%=chartData.fail%>],
-                    borderColor: '#CF6679',
-                    fill: false,
-                  },
-                  {
-                    label: "Scheduled",
-                    data: [<%=scheduleHistory%>],
-                    borderColor: '#444444',
-                    fill: true,
-                    stepped: 'middle',
-                  }
-
-                ]
-              },
-              options: {
-                responsive: true,
-                height: 275,
-                width: 275,
-                maintainAspectRatio: true,
-                plugins: {
-                  legend: {
-                    display: true,
-                    position: 'bottom'
-                  }
-                }
-              }
-            });
-
-            ctx = document.getElementById('areaChart').getContext('2d');
-      var areaChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: [<%-outputArray(chartData.labels)%>],
-          datasets: [
-            {
-              label: 'Runtime',
-              data: [<%=chartData.runtime%>],
-              borderColor: '#36a2eb',
-              backgroundColor: 'rgba(54, 162, 235, 0.2)',
-              fill: true
-            }
-          ]
-        },
-        options: {
-          responsive: true,
-          plugins: {
-            legend: {
-              display: true,
-              position: 'bottom'
-            }
-          }
-        }
-      });
-          });
-        </script>
-
-
+      </div>
     </div>
-    </div>
-    </div>
+  </div>
+
+  <script src="/js/apexcharts/apexcharts.min.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      var labels = <%- JSON.stringify(chartData.labels).replace(/</g, '\\u003c') %>;
+      var success = <%- JSON.stringify(chartData.success) %>;
+      var fail = <%- JSON.stringify(chartData.fail) %>;
+      var runtime = <%- JSON.stringify(chartData.runtime.map(function (v) { return Math.round(v); })) %>;
+      var scheduled = <%- JSON.stringify(scheduleHistory) %>;
+      var running = <%= runningCount %>;
+      var pct = <%= successPct %>;
+      var fgFor = function (mode) { return mode === 'dark' ? '#f8f8f2' : '#222222'; };
+      var fg = fgFor(localStorage.getItem('mode'));
+      var charts = [];
+      var grid = 'rgba(128,128,128,.2)';
+      var C = { ok: '#4caf93', fail: '#CF6679', run: '#ff9800', blue: '#63ade9', sched: '#b39ddb' };
+      var short = labels.map(function (d) { var p = d.split('-'); return p[1] + '/' + p[2]; });
+      var base = { background: 'transparent', foreColor: fg, toolbar: { show: false }, fontFamily: 'inherit' };
+
+      charts.push(new ApexCharts(document.querySelector('#donutChart'), {
+        chart: Object.assign({ type: 'donut', height: 300 }, base),
+        series: [<%= successCount %>, <%= failCount %>, running],
+        labels: ['Success', 'Failure', 'Running'],
+        colors: [C.ok, C.fail, C.run],
+        stroke: { width: 0 },
+        legend: { position: 'bottom' },
+        dataLabels: { enabled: false },
+        plotOptions: { pie: { donut: { size: '78%', labels: {
+          show: true,
+          name: { show: true, offsetY: 22, color: fg },
+          value: { show: true, fontSize: '40px', fontWeight: 600, offsetY: -14, color: fg,
+            formatter: function () { return pct + '%'; } },
+          total: { show: true, showAlways: true, label: 'Success rate', color: fg,
+            formatter: function () { return pct + '%'; } }
+        } } } },
+        states: { hover: { filter: { type: 'lighten', value: 0.05 } } }
+      }));
+      // Show the percentage large in the donut centre
+      var style = document.createElement('style');
+      style.textContent = '#donutChart .apexcharts-datalabel-label{font-size:13px;opacity:.7}';
+      document.head.appendChild(style);
+
+      charts.push(new ApexCharts(document.querySelector('#execChart'), {
+        chart: Object.assign({ type: 'line', height: 300, stacked: true }, base),
+        series: [
+          { name: 'Success', type: 'area', data: success },
+          { name: 'Fail', type: 'area', data: fail },
+          { name: 'Scheduled', type: 'line', data: scheduled }
+        ],
+        colors: [C.ok, C.fail, C.sched],
+        stroke: { curve: 'smooth', width: [2, 2, 3], dashArray: [0, 0, 5] },
+        fill: { type: ['gradient', 'gradient', 'solid'], gradient: { shadeIntensity: 1, opacityFrom: 0.7, opacityTo: 0.15, stops: [0, 95, 100] } },
+        xaxis: { categories: short, axisBorder: { show: false }, axisTicks: { show: false } },
+        yaxis: { min: 0, forceNiceScale: true, labels: { formatter: function (v) { return Math.round(v); } } },
+        grid: { borderColor: grid, strokeDashArray: 4 },
+        markers: { size: [0, 0, 4], strokeWidth: 0 },
+        dataLabels: { enabled: false },
+        legend: { position: 'top', horizontalAlign: 'right' },
+        tooltip: { shared: true, intersect: false }
+      }));
+
+      charts.push(new ApexCharts(document.querySelector('#runtimeChart'), {
+        chart: Object.assign({ type: 'bar', height: 220 }, base),
+        series: [{ name: 'Runtime (s)', data: runtime }],
+        colors: [C.blue],
+        plotOptions: { bar: { borderRadius: 5, columnWidth: '55%' } },
+        dataLabels: { enabled: false },
+        xaxis: { categories: short, axisBorder: { show: false }, axisTicks: { show: false } },
+        yaxis: { labels: { formatter: function (v) { return Math.round(v); } } },
+        grid: { borderColor: grid, strokeDashArray: 4 },
+        tooltip: { y: { formatter: function (v) { return v + ' s'; } } }
+      }));
+
+      charts.forEach(function (c) { c.render(); });
+
+      var origThemeChanged = window.themeChanged;
+      window.themeChanged = function (obj) {
+        origThemeChanged(obj);
+        var color = fgFor(obj.checked ? 'dark' : 'light');
+        charts.forEach(function (c, i) {
+          var opts = { chart: { foreColor: color } };
+          if (i === 0) opts.plotOptions = { pie: { donut: { labels: { name: { color: color }, value: { color: color }, total: { color: color } } } } };
+          c.updateOptions(opts, false, false);
+        });
+      };
+    });
+  </script>
 
     <%- include('./partials/_footer'); %>
 
