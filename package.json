@@ -50,7 +50,7 @@
         "materialize-css": "^1.0.0",
         "moment-timezone": "^0.6.2",
         "monaco-editor": "^0.53.0",
-        "mongoose": "^9.6.3",
+        "mongoose": "^9.7.3",
         "mqtt": "^5.15.1",
         "multer": "^2.3.0",
         "nanoid": "^5.1.11",
