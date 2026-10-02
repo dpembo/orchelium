@@ -18,7 +18,7 @@
     "express": "^5.2.0",
     "jsonwebtoken": "^9.0.3",
     "jws": "^4.0.1",
-    "mqtt": "^5.15.1",
+    "mqtt": "^5.15.2",
     "reconnecting-websocket": "^4.4.0",
     "uuid": "^14.0.2"
   },
