@@ -20,7 +20,7 @@
     "jws": "^4.0.1",
     "mqtt": "^5.15.1",
     "reconnecting-websocket": "^4.4.0",
-    "uuid": "^14.0.1"
+    "uuid": "^14.0.2"
   },
   "devDependencies": {
     "jest": "^30.4.2"
