@@ -52,7 +52,7 @@
         "monaco-editor": "^0.53.0",
         "mongoose": "^9.7.3",
         "mqtt": "^5.15.1",
-        "multer": "^2.3.0",
+        "multer": "^2.4.0",
         "nanoid": "^5.1.11",
         "node-schedule": "^2.1.1",
         "nodemailer": "^10.0.9",
