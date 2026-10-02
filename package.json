@@ -53,7 +53,7 @@
         "mongoose": "^9.7.3",
         "mqtt": "^5.15.1",
         "multer": "^2.4.0",
-        "nanoid": "^5.1.11",
+        "nanoid": "^5.1.16",
         "node-schedule": "^2.1.1",
         "nodemailer": "^10.0.9",
         "passport": "^0.7.0",
