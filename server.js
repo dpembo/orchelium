@@ -3480,6 +3480,7 @@ app.get('/',User.isAuthenticated, async (request, response) => {
         var rt = ex.endTime ? (new Date(ex.endTime) - st) / 1000 : 0;
         recentRuns.push({
           name: ex.jobName || ex.orchestrationName || jobId,
+          jobId: jobId,
           ts: st,
           status: ex.finalStatus === 'success' ? 'success' : (ex.finalStatus === 'failure' || ex.finalStatus === 'error') ? 'fail' : 'running',
           runtime: rt,
@@ -3495,6 +3496,16 @@ app.get('/',User.isAuthenticated, async (request, response) => {
     ...r,
     when: moment.tz(r.ts, tz).format('MMM D, HH:mm:ss')
   }));
+
+  for (const r of recentRuns) {
+    if (r.type !== 'Orchestration' || !r.jobId) continue;
+    try {
+      const job = await orchestration.getJob(r.jobId);
+      if (job && job.name) r.name = job.name;
+    } catch (err) {
+      logger.warn(`Could not get orchestration name for [${r.jobId}]: ${err.message}`);
+    }
+  }
 
   response.render('index', {
 
