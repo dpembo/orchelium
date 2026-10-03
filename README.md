@@ -122,7 +122,6 @@ Extended docs also available at [deepwiki.com/dpembo/orchelium](https://deepwiki
 | Repo | Description |
 |---|---|
 | [dpembo/orchelium-plugins](https://github.com/dpembo/orchelium-plugins) | Official plugin registry (19+ plugins) |
-| [dpembo/orchelium-website](https://github.com/dpembo/orchelium-website) | orchelium.com marketing site |
 
 ---
 
