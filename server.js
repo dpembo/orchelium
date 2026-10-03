@@ -3491,7 +3491,7 @@ app.get('/',User.isAuthenticated, async (request, response) => {
     logger.warn(`Unable to load orchestration executions for dashboard: ${e.message}`);
   }
   recentRuns.sort((a, b) => b.ts - a.ts);
-  recentRuns = recentRuns.slice(0, 5).map(r => ({
+  recentRuns = recentRuns.slice(0, 4).map(r => ({
     ...r,
     when: moment.tz(r.ts, tz).format('MMM D, HH:mm:ss')
   }));
