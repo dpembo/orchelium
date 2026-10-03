@@ -4,7 +4,7 @@ Welcome to the Orchelium docs.
 
 ## Quick links
 
-- [Overview](README.MD)
+- [Overview](README.md)
 - [Installation](installation.md)
 - [Backup Schedules](backup-schedules.md)
 - [Orchestrations](orchestrations.md)
