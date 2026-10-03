@@ -405,8 +405,7 @@ function isUnscheduled(manual, triggerType) {
 }
 
 async function getTodaysRun(){
-    var today = new Date().toISOString();
-    var todayStr = today.split("T")[0];
+    var todayStr = moment.tz(new Date(), serverConfig.server.timezone).format('YYYY-MM-DD');
 
     var count=0;
     var schedCount=0;
@@ -423,7 +422,7 @@ async function getTodaysRun(){
         }
 
         var runDate = items[i].runDate;
-        var runDateStr = runDate.split("T")[0];
+        var runDateStr = runDate.substring(0, 10);
 
         if(runDateStr==todayStr){
             if(items[i].returnCode==0)
@@ -449,7 +448,7 @@ async function getTodaysRun(){
                 executions.forEach(execution => {
                     if (execution.startTime) {
                         const execDate = new Date(execution.startTime);
-                        const execDateStr = execDate.toISOString().split("T")[0];
+                        const execDateStr = moment.tz(execDate, serverConfig.server.timezone).format('YYYY-MM-DD');
                         
                         // Count this execution if it ran today
                         if (execDateStr === todayStr) {
