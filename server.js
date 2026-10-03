@@ -3458,10 +3458,58 @@ app.get('/',User.isAuthenticated, async (request, response) => {
   var successCount = chartData.success.reduce((a, b) => a + b, 0);
   var failCount = chartData.fail.reduce((a, b) => a + b, 0);
 
-  //scheduler.getTodaysScheduleCount();
-  
+  // Last 5 executions: job history (minus orchestration node items) plus parent orchestration executions
+  var recentRuns = [];
+  var tz = serverConfig.server.timezone;
+  historyList.forEach(item => {
+    if (item.jobName && /^Orchestration\s+\[.+?\]\s+Execution\s+\[.+?\]\s+Node\s+\[.+?\]/.test(item.jobName)) return;
+    recentRuns.push({
+      name: item.jobName,
+      ts: moment.tz(item.runDate, 'YYYY-MM-DD HH:mm:ss.SSS', tz).valueOf(),
+      status: item.returnCode == 0 ? 'success' : 'fail',
+      runtime: parseFloat(item.runTime) || 0,
+      type: 'Job'
+    });
+  });
+  try {
+    var orchExecs = await db.getData('ORCHESTRATION_EXECUTIONS').catch(() => ({}));
+    for (const jobId in (orchExecs || {})) {
+      (orchExecs[jobId] || []).forEach(ex => {
+        if (!ex.startTime) return;
+        var st = new Date(ex.startTime).getTime();
+        var rt = ex.endTime ? (new Date(ex.endTime) - st) / 1000 : 0;
+        recentRuns.push({
+          name: ex.jobName || ex.orchestrationName || jobId,
+          jobId: jobId,
+          ts: st,
+          status: ex.finalStatus === 'success' ? 'success' : (ex.finalStatus === 'failure' || ex.finalStatus === 'error') ? 'fail' : 'running',
+          runtime: rt,
+          type: 'Orchestration'
+        });
+      });
+    }
+  } catch (e) {
+    logger.warn(`Unable to load orchestration executions for dashboard: ${e.message}`);
+  }
+  recentRuns.sort((a, b) => b.ts - a.ts);
+  recentRuns = recentRuns.slice(0, 4).map(r => ({
+    ...r,
+    when: moment.tz(r.ts, tz).format('MMM D, HH:mm:ss')
+  }));
+
+  for (const r of recentRuns) {
+    if (r.type !== 'Orchestration' || !r.jobId) continue;
+    try {
+      const job = await orchestration.getJob(r.jobId);
+      if (job && job.name) r.name = job.name;
+    } catch (err) {
+      logger.warn(`Could not get orchestration name for [${r.jobId}]: ${err.message}`);
+    }
+  }
 
   response.render('index', {
+
+    recentRuns: recentRuns,
 
     subject: 'Orchelium',
     name: 'Control',

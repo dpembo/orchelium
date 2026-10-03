@@ -66,14 +66,21 @@ Trigger workflows from:
 ### Run the Hub
 
 ```bash
-docker run -d \
-  --name orchelium \
-  -p 3000:3000 \
-  -v orchelium-data:/app/data \
-  ghcr.io/dpembo/orchelium:latest
+docker run \
+  -d \
+  --name Orchelium \
+  -e TZ=Europe/London \
+  -p 8082:8082 \
+  -p 49991:49981 \
+  --restart unless-stopped \
+  -v /custom/Orchelium/data:/usr/src/app/data \
+  -v /custom/Orchelium/scripts:/usr/src/app/scripts \
+  -v /custom/Orchelium/logs:/usr/src/app/logs \
+  -v /custom/Orchelium/plugins:/usr/src/app/plugins \
+  ghcr.io/dpembo/orchelium/hub:latest
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:8082](http://localhost:8082) in your browser. See the [installation guide](./docs/installation.md) for all parameters, environment variables and a Docker Compose example.
 
 ### Install an Agent
 

@@ -399,6 +399,11 @@ async function getOrchestrationSuccessPercentage(jobId)
     }
 }
 
+// The manual field holds true or a trigger string ('manual', 'webhook', 'rule', 'schedule')
+function isUnscheduled(manual, triggerType) {
+    return manual === true || manual === 'true' || manual === 'manual' || manual === 'webhook' || triggerType === 'webhook';
+}
+
 async function getTodaysRun(){
     var today = new Date().toISOString();
     var todayStr = today.split("T")[0];
@@ -424,12 +429,12 @@ async function getTodaysRun(){
             if(items[i].returnCode==0)
             {
                 count++
-                if(items[i].manual==true)manualCount++
+                if(isUnscheduled(items[i].manual))manualCount++
                 else schedCount++;
             }
             else{
                 fail++;
-                if(items[i].manual==true)manualFail++
+                if(isUnscheduled(items[i].manual))manualFail++
                 else schedFail++;
             }
         }
@@ -450,10 +455,12 @@ async function getTodaysRun(){
                         if (execDateStr === todayStr) {
                             if (execution.finalStatus === 'success') {
                                 count++;
-                                schedCount++; // Orchestrations are scheduled, not manual
+                                if (isUnscheduled(execution.manual, execution.triggerContext && execution.triggerContext.type)) manualCount++;
+                                else schedCount++;
                             } else if (execution.finalStatus === 'failure' || execution.finalStatus === 'error') {
                                 fail++;
-                                schedFail++;
+                                if (isUnscheduled(execution.manual, execution.triggerContext && execution.triggerContext.type)) manualFail++;
+                                else schedFail++;
                             }
                         }
                     }
