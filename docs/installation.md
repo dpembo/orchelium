@@ -8,7 +8,7 @@ Orchelium is recommended to be installed and executed through the released conta
 ### Container Setup
 
 #### Pre-requisites
-Please ensure you have Docker or any other container execution platform installed.  This documentation assumes the usage of Docker
+Please ensure you have Docker or any other container execution platform installed.  This documentation assumes the usage of Docker. For windows users, you can develop and test using WSL (Windows Subsystem for Linux), however this isn't recommended for an operational server instance.
 
 #### Start an instance of this image
 
@@ -25,78 +25,75 @@ docker run \
   --name Orchelium \
   -e TZ=Europe/London \
   -p 8082:8082 \
-  -p 49981:49981 \
+  -p 49991:49981 \
   --restart unless-stopped \
   -v /custom/Orchelium/data:/usr/src/app/data \
   -v /custom/Orchelium/scripts:/usr/src/app/scripts \
   -v /custom/Orchelium/logs:/usr/src/app/logs \
-  -v /container-fs/backup-control/plugins:/usr/src/app/plugins \
+  -v /custom/Orchelium/plugins:/usr/src/app/plugins \
   ghcr.io/dpembo/orchelium/hub:latest
 ```
 
-#### Parameter Details
+#### Docker Run Parameters
 
+| Parameter | Description | Example |
+|---|---|---|
+| `-d` | Run the container in the background (detached) | `-d` |
+| `--name` | Name given to the container | `--name Orchelium` |
+| `-p <host>:8082` | Web application port. Change only the host side of the mapping if 8082 is in use; do not change the container port | `-p 8082:8082` |
+| `-p <host>:49981` | WebSocket server port used for hub/agent communication. Must match the port agents connect to | `-p 49991:49981` |
+| `--restart` | Restart policy so the hub restarts after a reboot or failure | `--restart unless-stopped` |
+| `-v <host path>:/usr/src/app/data` | Holds all Orchelium data including job history, user setup, configuration and statistics | `-v /custom/Orchelium/data:/usr/src/app/data` |
+| `-v <host path>:/usr/src/app/scripts` | Where the backup/shell scripts you schedule are stored | `-v /custom/Orchelium/scripts:/usr/src/app/scripts` |
+| `-v <host path>:/usr/src/app/logs` | Directory where log files are written | `-v /custom/Orchelium/logs:/usr/src/app/logs` |
+| `-v <host path>:/usr/src/app/plugins` | Where plugins are stored | `-v /custom/Orchelium/plugins:/usr/src/app/plugins` |
+| `-e <name>=<value>` | Sets an environment variable in the container (see below) | `-e TZ=Europe/London` |
 
+#### Environment Variables
+
+Set using `-e NAME=value` on `docker run`, or under `environment:` in Docker Compose.
 
 | Environment Variable | Description | Example |
-|---|---|--|
+|---|---|---|
 | TZ | Time zone to ensure the container operates in your correct time zone for display of date/times.  Time zone names follow the standard IANA database, of which you can find a list via [wikipedia](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)| Europe/London |
 | ORCHELIUM_ENCRYPTION_KEY | This variable is used to provide the encryption key used between the Hub and Agents to ensure the data/commmands cannot be compromised, or the link from agent to server be misued.  This has a default value, but its recommended to change this.  Note that the environment variable has to be set the same on the server and any environment where an agent is deployed for the communication to work correctly|MySecretKey|
 | ORCHELIUM_KEY_ENFORCE | Controls server behaviour when `ORCHELIUM_ENCRYPTION_KEY` is not set (i.e. the default key `CHANGEIT` is in use). Accepted values: `strict` — server refuses to start; `warn` (default) — server starts but logs a prominent warning; `silent` — server starts with no warning (not recommended outside development). This variable must be set consistently on both the server and all agents. | `warn` |
-| | | |
-| **Volume** | **Description** | **Example** |
-| /usr/src/app/data | This volume is used to hold all the various data that Orchelium uses including job history, user setup, configuration and statistics |-v custom/data:/usr/src/app/data
-| usr/src/app/scripts | This is where all your backup/any other shell scripts you schedule are stored|/etc/scripts|
-| usr/src/app/logs | Directory where log information can be outputted|/var/logs/Orchelium|
 
-When using `server.definitions.backend` as `fs` or `hybrid`, the data volume also contains filesystem-backed definition assets:
+#### Docker Compose
 
-- `data/jobs` for schedule/job definitions (`*.job.json`)
-- `data/orchestrations` for orchestration definitions (`*.orch.json`)
-- `data/.state` for internal definition-store operational state
+The equivalent of the `docker run` command above as a `docker-compose.yml`:
 
-These are created automatically if missing.
-
-Warning for users adopting `2026.06.06.02` onward:
-
-- The default definitions backend is `fs`.
-- If your existing schedules/orchestrations are still DB-backed and not migrated, temporarily set `server.definitions.backend` to `hybrid`, run migration, verify files, then return to `fs`.
-
-#### Upgrade migration (versions earlier than `2026.06.06.01`)
-
-If upgrading from a version before `2026.06.06.01`, move definitions safely using this flow:
-
-1. Set `server.definitions.backend` to `hybrid` in `data/server-config.json`.
-2. Restart the hub.
-3. Run migration once:
-
-```bash
-curl -X POST http://localhost:8082/rest/definitions/migrate-db-to-fs \
-  -H "Content-Type: application/json" \
-  -d '{"deleteSource":false}' \
-  -b cookie.txt
+```yaml
+services:
+  orchelium:
+    image: ghcr.io/dpembo/orchelium/hub:latest
+    container_name: Orchelium
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/London
+      # - ORCHELIUM_ENCRYPTION_KEY=MySecretKey
+      # - ORCHELIUM_KEY_ENFORCE=warn
+    ports:
+      - "8082:8082"
+      - "49981:49981"
+    volumes:
+      - /custom/Orchelium/data:/usr/src/app/data
+      - /custom/Orchelium/scripts:/usr/src/app/scripts
+      - /custom/Orchelium/logs:/usr/src/app/logs
+      - /custom/Orchelium/plugins:/usr/src/app/plugins
 ```
 
-4. Verify status and counts:
+Start it with `docker compose up -d`.
 
-```bash
-curl -X GET http://localhost:8082/rest/definitions/status -b cookie.txt
-```
+#### Upgrading
 
-5. Confirm files exist under `data/jobs` and `data/orchestrations`.
-6. Switch backend to `fs` and restart.
-
-Keep `deleteSource:false` until you have validated file-backed operation.
-| | | |
-| **Port** | **Description** | **Example** |
-| 8082 | The port the web application is hosted on | -p 8080:8082 |
-| 49981 | websocket server port used for server/agent communication | -p 49981:49981 |
+If you are upgrading an existing installation, including migrating job/orchestration definitions to filesystem storage, see [Upgrade](./Upgrade.md).
 
 ### Manual Installation
-Details instructions are provided here as it's recommended to run this from the container image, however it is just a node.js server applciation, so can be setup by: 
+Detailed instructions are provided here as it's recommended to run this from the container image, however it is just a node.js server applciation, so can be setup by: 
 * Cloning the repo
-* Installing Node (v20/v21)
-* Using NPM to install libs
+* Installing Node (v2x)
+* Using npm to install libs
 * Setting environment variables appropritate
 * Launching the app (server.js)
 
@@ -212,6 +209,7 @@ Then press submit, and your agent will be added
 
 ## Related Documentation
 
+- [Upgrading from old versions](./Upgrade.md) Upgrade information when moving from a version prior to 2026.06.06.xx
 - [Job Schedules](./backup-schedules.md): Creating and managing schedules
 - [Orchestrations](./orchestrations.md): Building complex  workflows
 - [Settings Configuration](./settings-config.md): Server and agent configuration
