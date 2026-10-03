@@ -44,6 +44,8 @@ Design multi-step backup pipelines using a drag-and-drop node editor:
 - Real-time step-by-step monitoring
 - Live log streaming from every node
 
+![image info](docs/screens/orchestration.jpeg)
+
 ### Plugin Ecosystem
 19+ official plugins covering backup, databases, file sync, storage, containers, and system tools. Install in one click from the Plugin Manager. Browse the catalog at [orchelium.com/plugins](https://orchelium.com/plugins/).
 
