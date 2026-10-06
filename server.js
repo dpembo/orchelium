@@ -3461,6 +3461,13 @@ app.get('/',User.isAuthenticated, async (request, response) => {
   // Last 5 executions: job history (minus orchestration node items) plus parent orchestration executions
   var recentRuns = [];
   var tz = serverConfig.server.timezone;
+  const runTrigger = (manual, ctx) => {
+    const t = ctx && ctx.type;
+    if (manual === 'webhook' || t === 'webhook') return 'Webhook';
+    if (manual === 'rule' || t === 'rule') return 'Rule';
+    if (manual === true || manual === 'true' || manual === 'manual') return 'Manual';
+    return 'Schedule';
+  };
   historyList.forEach(item => {
     if (item.jobName && /^Orchestration\s+\[.+?\]\s+Execution\s+\[.+?\]\s+Node\s+\[.+?\]/.test(item.jobName)) return;
     recentRuns.push({
@@ -3468,7 +3475,8 @@ app.get('/',User.isAuthenticated, async (request, response) => {
       ts: moment.tz(item.runDate, 'YYYY-MM-DD HH:mm:ss.SSS', tz).valueOf(),
       status: item.returnCode == 0 ? 'success' : 'fail',
       runtime: parseFloat(item.runTime) || 0,
-      type: 'Job'
+      trigger: runTrigger(item.manual, item.triggerContext),
+      type: 'Script'
     });
   });
   try {
@@ -3484,6 +3492,7 @@ app.get('/',User.isAuthenticated, async (request, response) => {
           ts: st,
           status: ex.finalStatus === 'success' ? 'success' : (ex.finalStatus === 'failure' || ex.finalStatus === 'error') ? 'fail' : 'running',
           runtime: rt,
+          trigger: runTrigger(ex.manual, ex.triggerContext),
           type: 'Orchestration'
         });
       });
