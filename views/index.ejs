@@ -68,6 +68,8 @@ function outputArray(inArray)
     .run-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .run-meta { font-size: .75rem; opacity: .6; }
     .run-badge { font-size: .7rem; padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(128,128,128,.4); flex: none; }
+    .run-badge[class*="trigger-"] { background: rgba(33,150,243,.18); border-color: rgba(33,150,243,.5); }
+    .run-badge.type-orchestration { background: rgba(156,39,176,.18); border-color: rgba(156,39,176,.5); }
     .run-time { font-variant-numeric: tabular-nums; font-size: .85rem; opacity: .8; flex: none; min-width: 52px; text-align: right; }
     .empty-note { opacity: .6; padding: 24px 0; text-align: center; }
 
@@ -182,7 +184,8 @@ function outputArray(inArray)
                     <div class="run-name" title="<%= r.name %>"><%= r.name %></div>
                     <div class="run-meta"><%= r.when %></div>
                   </div>
-                  <span class="run-badge"><%= r.type %></span>
+                  <span class="run-badge trigger-<%= r.trigger.toLowerCase() %>"><%= r.trigger %></span>
+                  <span class="run-badge type-<%= r.type.toLowerCase() %>"><%= r.type %></span>
                   <span class="run-time"><%= fmtRuntime(r.runtime) %></span>
                 </li>
                 <% }); %>
