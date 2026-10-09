@@ -10,6 +10,56 @@ function processInternalJob(inItem){
   return inItem;
 }
 
+
+function formatNodeTypeLabel(type) {
+  var t = String(type || '').toLowerCase();
+  var map = {
+    'start': 'Start',
+    'end-success': 'Success',
+    'end-failure': 'Failure',
+    'end-fail': 'Failure',
+    'execute': 'Script',
+    'script': 'Script',
+    'http': 'HTTP',
+    'plugin': 'Plugin',
+    'condition': 'Condition',
+    'decision': 'Condition',
+    'split-join': 'Split/Join',
+    'split': 'Split',
+    'join': 'Join',
+    'delay': 'Delay',
+    'wait': 'Wait',
+    'notify': 'Notify',
+    'notification': 'Notify'
+  };
+  if (map[t]) return map[t];
+  if (!t) return 'Step';
+  return t.replace(/[-_]/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+}
+
+function getTriggerBadge(manual) {
+  // Returns { key, label, title } for index-style run-badge
+  if (manual === true || manual === 'true' || manual === 'manual') {
+    return { key: 'manual', label: 'Manual', title: 'Manual Execution' };
+  }
+  if (manual === 'webhook') {
+    return { key: 'webhook', label: 'Webhook', title: 'Webhook Triggered' };
+  }
+  if (manual === 'rule') {
+    return { key: 'rule', label: 'Rule', title: 'Metric Rule Triggered' };
+  }
+  if (manual === 'threshold-cpu') {
+    return { key: 'rule', label: 'Rule', title: 'CPU Threshold Exceeded' };
+  }
+  if (manual === 'threshold-disk') {
+    return { key: 'rule', label: 'Rule', title: 'Mount Threshold Exceeded' };
+  }
+  if (manual === 'update') {
+    return { key: 'manual', label: 'Update', title: 'Agent Update' };
+  }
+  return { key: 'schedule', label: 'Schedule', title: 'Scheduled Execution' };
+}
+
 function getSchedule(jobName){
   for(var i=0;i<schedules.length;i++)
   {
@@ -206,32 +256,9 @@ if (Array.isArray(historyList)) {
                 <span style="font-size: 0.85em; color: var(--text-muted); display: block; margin-top: 3px;"><%=historyList[i].children ? historyList[i].children.length : 0%> nodes executed</span>
               </td>
               <td style="vertical-align: top;">
-                <% var runType="schedule"; var runDesc="Scheduled Execution";%>
-                <% var modeColor = parseInt(historyList[i].returnCode)!=0 ? "#d32f2f" : "var(--text-primary)"; %>
-                <% 
-                if(historyList[i].manual!==undefined && historyList[i].manual==true){
-                  runType="play_arrow";runDesc="Manual Execution";
-                }
-                if(historyList[i].manual!==undefined && historyList[i].manual=="manual"){
-                  runType="play_arrow";runDesc="Manual Execution";
-                }
-                if(historyList[i].manual!==undefined && historyList[i].manual=="update"){
-                  runType="system_update_alt";runDesc="Agent Update";
-                }
-                if(historyList[i].manual!==undefined && historyList[i].manual=="threshold-cpu"){
-                  runType="data_thresholding";runDesc="CPU Threshold Exceeded";
-                }
-                if(historyList[i].manual!==undefined && historyList[i].manual=="threshold-disk"){
-                  runType="disc_full";runDesc="Mount Threshold Exceeded";
-                }
-                if(historyList[i].manual!==undefined && historyList[i].manual=="rule"){
-                  runType="monitor_heart";runDesc="Metric Rule Triggered";
-                }
-                if(historyList[i].manual!==undefined && historyList[i].manual=="webhook"){
-                  runType="cloud_queue";runDesc="Webhook Triggered";
-                }
-                %>
-                <span title="<%=runDesc%>" class="material-icons" style="color:<%=modeColor%>;"><%=runType%></span>
+                <% var trig = getTriggerBadge(historyList[i].manual); %>
+                <span class="run-badge trigger-<%= trig.key %>" title="<%= trig.title %>"><%= trig.label %></span>
+                <span class="run-badge type-orchestration" title="Orchestration">Orchestration</span>
               </td>
               <% 
                   var dateNow = new Date().getTime();
@@ -269,9 +296,9 @@ if (Array.isArray(historyList)) {
               <td style="vertical-align: top;"><span><%=successPct%>%</span></td>
               <td style="vertical-align: top;">
                 <% if(parseInt(historyList[i].returnCode)==0){%>
-                  <span title="Success" class="successIcons material-icons">check_circle</span>
+                  <span class="run-dot success" title="Success"></span>
                 <% } else {%>
-                  <span title="Failure" class="errorIcons material-icons">flag_circle</span>
+                  <span class="run-dot fail" title="Failure — exit code <%= historyList[i].returnCode %>"></span>
                 <% } %>
               </td>
               <td style="vertical-align: top;">
@@ -304,9 +331,23 @@ if (Array.isArray(historyList)) {
                     <span style="font-size: 0.9em; color: var(--text-muted);"></span><% if (childNode.nodeAlias) { %><%=childNode.nodeAlias%><% } else { var nodeIdMatch = childNode.jobName.match(/Node \[(.+?)\]$/); %><%=(nodeIdMatch ? nodeIdMatch[1] : childNode.jobName)%><% } %>
                   </td>
                   <td style="vertical-align: top;">
-                    <% var runType="crop_16_9"; var runDesc="execution node";%>
-                    <% var childModeColor = parseInt(childNode.returnCode)!=0 ? "#d32f2f" : "var(--text-primary)"; %>
-                    <span title="<%=runDesc%>" class="material-icons" style="color:<%=childModeColor%>;"><%=runType%></span>
+                    <span class="run-badge type-node" title="Orchestration node">Node</span>
+                    <%
+                      var nType = childNode.nodeType || '';
+                      var nTypeLabel = formatNodeTypeLabel(nType);
+                      var hoverParts = [];
+                      if (childNode.nodeAlias || childNode.nodeLabel) hoverParts.push('Name: ' + (childNode.nodeAlias || childNode.nodeLabel));
+                      if (nType) hoverParts.push('Type: ' + nTypeLabel + ' (' + nType + ')');
+                      if (childNode.nodeId) hoverParts.push('Id: ' + childNode.nodeId);
+                      if (childNode.nodeDescription) hoverParts.push(childNode.nodeDescription);
+                      if (childNode.nodeScript) hoverParts.push('Script: ' + childNode.nodeScript);
+                      if (childNode.nodePlugin) hoverParts.push('Plugin: ' + childNode.nodePlugin);
+                      if (childNode.returnCode != null) hoverParts.push('Exit: ' + childNode.returnCode);
+                      if (childNode.runTime != null) hoverParts.push('Runtime: ' + childNode.runTime + 's');
+                      var typeTitle = hoverParts.length ? hoverParts.join(' · ') : (nTypeLabel + ' node');
+                      var typeClass = 'type-nodestep type-nodestep-' + String(nType || 'unknown').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+                    %>
+                    <span class="run-badge <%= typeClass %>" title="<%= typeTitle.replace(/"/g, '&quot;') %>"><%= nTypeLabel %></span>
                   </td>
                   <% 
                       var dateNow = new Date().getTime();
@@ -331,26 +372,31 @@ if (Array.isArray(historyList)) {
                   <td style="vertical-align: top;">-</td>
                   <td style="vertical-align: top;">
                     <% if(parseInt(childNode.returnCode)==0){%>
-                      <span title="Success - Exit code <%=childNode.returnCode%>" class="successIcons material-icons">check_circle</span>
+                      <span class="run-dot success" title="Success — exit code <%= childNode.returnCode %>"></span>
                     <% } else {%>
-                      <span title="Failure - Exit code: <%=childNode.returnCode%>" class="errorIcons material-icons">flag_circle</span>
+                      <span class="run-dot fail" title="Failure — exit code <%= childNode.returnCode %>"></span>
                     <% } %>
                   </td>
                   <td style="vertical-align: top;">
                     <% var childLogClass = "tableIconButton"; %>
                     <% if(parseInt(childNode.returnCode)!=0){ childLogClass = "tableIconButtonError"; } %>
-                    <% var childIcon = childNode.icon || "crop_16_9"; %>
-                    <% var childColor = childNode.color || "#000000"; %>
-                    <% var childNodeMatch = childNode.jobName ? childNode.jobName.match(/^Orchestration \[[^\]]+\] Execution \[[^\]]+\] Node \[([^\]]+)\]$/) : null; %>
-                    <% var childNodeId = childNodeMatch ? childNodeMatch[1] : ""; %>
-                    <% var parentJobIdEnc = encodeURIComponent(historyList[i].jobId || ""); %>
-                    <% var parentExecIdEnc = encodeURIComponent(historyList[i].executionId || ""); %>
-                    <% var childNodeIdEnc = encodeURIComponent(childNodeId || ""); %>
-                    <% var childIconJs = String(childIcon).replace(/\\/g, "\\\\").replace(/'/g, "\\'"); %>
-                    <% var childColorJs = String(childColor).replace(/\\/g, "\\\\").replace(/'/g, "\\'"); %>
-                    <% var childNameJs = String(childNode.jobName || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'"); %>
-                    <pre style="display:none" id="orch-logdetail-<%=i%>-<%=childIdx%>"><%=childNode.log || ''%></pre>
-                    <a href="#modal-orch-<%=i%>-<%=childIdx%>" id="modal-orch-link-<%=i%>-<%=childIdx%>" onclick="openOrchestrationNodeLog('<%=parentJobIdEnc%>','<%=childNodeIdEnc%>','<%=parentExecIdEnc%>','<%=childIconJs%>','<%=childColorJs%>','<%=childNameJs%>','orch-logdetail-<%=i%>-<%=childIdx%>'); return false;" title="View Execution Log"><span class="material-icons <%=childLogClass%> vertTop">description</span></a>
+                    <span class="run-badge type-node" title="Orchestration node">Node</span>
+                    <%
+                      var nType = childNode.nodeType || '';
+                      var nTypeLabel = formatNodeTypeLabel(nType);
+                      var hoverParts = [];
+                      if (childNode.nodeAlias || childNode.nodeLabel) hoverParts.push('Name: ' + (childNode.nodeAlias || childNode.nodeLabel));
+                      if (nType) hoverParts.push('Type: ' + nTypeLabel + ' (' + nType + ')');
+                      if (childNode.nodeId) hoverParts.push('Id: ' + childNode.nodeId);
+                      if (childNode.nodeDescription) hoverParts.push(childNode.nodeDescription);
+                      if (childNode.nodeScript) hoverParts.push('Script: ' + childNode.nodeScript);
+                      if (childNode.nodePlugin) hoverParts.push('Plugin: ' + childNode.nodePlugin);
+                      if (childNode.returnCode != null) hoverParts.push('Exit: ' + childNode.returnCode);
+                      if (childNode.runTime != null) hoverParts.push('Runtime: ' + childNode.runTime + 's');
+                      var typeTitle = hoverParts.length ? hoverParts.join(' · ') : (nTypeLabel + ' node');
+                      var typeClass = 'type-nodestep type-nodestep-' + String(nType || 'unknown').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+                    %>
+                    <span class="run-badge <%= typeClass %>" title="<%= typeTitle.replace(/"/g, '&quot;') %>"><%= nTypeLabel %></span>
                   </td>
                 </tr>
               <% }); %>
@@ -373,32 +419,9 @@ if (Array.isArray(historyList)) {
               <% } %>
             </td>
             <td style="vertical-align: top;">
-              <% var runType="schedule"; var runDesc="Scheduled Execution";%>
-              <% var modeColor = parseInt(historyList[i].returnCode)!=0 ? "#d32f2f" : "var(--text-primary)"; %>
-              <% 
-              if(historyList[i].manual!==undefined && historyList[i].manual==true){
-                runType="play_arrow";runDesc="Manual Execution";
-              }
-              if(historyList[i].manual!==undefined && historyList[i].manual=="manual"){
-                runType="play_arrow";runDesc="Manual Execution";
-              }
-              if(historyList[i].manual!==undefined && historyList[i].manual=="update"){
-                runType="system_update_alt";runDesc="Agent Update";
-              }
-              if(historyList[i].manual!==undefined && historyList[i].manual=="threshold-cpu"){
-                runType="data_thresholding";runDesc="CPU Threshold Exceeded";
-              }
-              if(historyList[i].manual!==undefined && historyList[i].manual=="threshold-disk"){
-                runType="disc_full";runDesc="Mount Threshold Exceeded";
-              }
-              if(historyList[i].manual!==undefined && historyList[i].manual=="rule"){
-                runType="monitor_heart";runDesc="Metric Rule Triggered";
-              }
-              if(historyList[i].manual!==undefined && historyList[i].manual=="webhook"){
-                runType="cloud_queue";runDesc="Webhook Triggered";
-              }
-              %>
-              <span title="<%=runDesc%>" class="material-icons" style="color:<%=modeColor%>;"><%=runType%></span>
+              <% var trig = getTriggerBadge(historyList[i].manual); %>
+              <span class="run-badge trigger-<%= trig.key %>" title="<%= trig.title %>"><%= trig.label %></span>
+              <span class="run-badge type-script" title="Script">Script</span>
 
             </td>
             <% 
@@ -426,18 +449,10 @@ if (Array.isArray(historyList)) {
             <td style="vertical-align: top;"><span><%=successPct%>%</span></td>
             <td style="vertical-align: top;">
               <% if(parseInt(historyList[i].returnCode)==0){%>
-                <span title="Success - Return code <%=historyList[i].returnCode%>" class="<%=icons%> material-icons">check_circle</span>
-                <%
-              }
-              else{%>
-                <% if(!deleted){%>
-                  <span title="Error - Return code: <%=historyList[i].returnCode%>" class="errorIcons material-icons">flag_circle</span>
-                <% } else {%>
-                  <span title="Error - Return code: <%=historyList[i].returnCode%>" class="deletedIcons material-icons">flag_circle</span>
-                <% }%>
-              <%
-              }
-              %>
+                <span class="run-dot success" title="Success — return code <%= historyList[i].returnCode %>"></span>
+              <% } else { %>
+                <span class="run-dot fail" title="Error — return code <%= historyList[i].returnCode %><%= deleted ? ' (deleted)' : '' %>"></span>
+              <% } %>
             </td>
             <td style="vertical-align: top;">
               <pre style="display:none" id="logdetail<%=i%>"><%=historyList[i].log%></pre>

@@ -82,6 +82,179 @@ tbody tr.orch-expanded td {
     border-bottom: none !important;
     border-top: none !important;
 }
+
+    /* Status dots (match index recent executions) */
+    .run-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      flex: none;
+      vertical-align: middle;
+    }
+    .run-dot.success { background: #4caf93; }
+    .run-dot.fail { background: #CF6679; }
+    .run-dot.running { background: #ff9800; }
+    .hist-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    .hist-status-label {
+      font-size: 0.75rem;
+      opacity: 0.75;
+      font-variant-numeric: tabular-nums;
+    }
+    .hist-status-fail {
+      color: #c62828;
+      opacity: 1;
+      font-weight: 500;
+    }
+    body.dark .hist-status-fail { color: #ef9a9a; }
+
+    /* Index-style recent-execution badges on history table */
+    .run-badge {
+      font-size: .7rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(128,128,128,.4);
+      display: inline-block;
+      text-align: center;
+      box-sizing: border-box;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+      margin: 1px 2px 1px 0;
+      vertical-align: middle;
+    }
+    .run-badge[class*="trigger-"] { min-width: 64px; }
+    .run-badge[class*="type-"] { min-width: 72px; }
+    .run-badge.trigger-manual {
+      background: rgba(69, 90, 100, 0.18);
+      border-color: rgba(69, 90, 100, 0.55);
+      color: #37474f;
+    }
+    .run-badge.trigger-webhook {
+      background: rgba(0, 131, 143, 0.18);
+      border-color: rgba(0, 131, 143, 0.55);
+      color: #006064;
+    }
+    .run-badge.trigger-rule {
+      background: rgba(106, 27, 154, 0.18);
+      border-color: rgba(106, 27, 154, 0.55);
+      color: #4a148c;
+    }
+    .run-badge.trigger-schedule {
+      background: rgba(21, 101, 192, 0.18);
+      border-color: rgba(21, 101, 192, 0.55);
+      color: #0d47a1;
+    }
+    .run-badge.type-orchestration {
+      background: rgba(156, 39, 176, 0.18);
+      border-color: rgba(156, 39, 176, 0.5);
+      color: #6a1b9a;
+    }
+    .run-badge.type-script {
+      background: rgba(33, 150, 243, 0.12);
+      border-color: rgba(33, 150, 243, 0.4);
+      color: #1565c0;
+    }
+    .run-badge.type-node {
+      background: rgba(128, 128, 128, 0.12);
+      border-color: rgba(128, 128, 128, 0.35);
+      color: #616161;
+      min-width: 48px;
+      font-size: .65rem;
+    }
+    body.dark .run-badge.trigger-manual { color: #cfd8dc; background: rgba(69,90,100,.35); }
+    body.dark .run-badge.trigger-webhook { color: #80deea; background: rgba(0,131,143,.35); }
+    body.dark .run-badge.trigger-rule { color: #ce93d8; background: rgba(106,27,154,.35); }
+    body.dark .run-badge.trigger-schedule { color: #90caf9; background: rgba(21,101,192,.35); }
+    body.dark .run-badge.type-orchestration { color: #e1bee7; background: rgba(156,39,176,.3); }
+    body.dark .run-badge.type-script { color: #90caf9; background: rgba(33,150,243,.25); }
+    body.dark .run-badge.type-node { color: #bdbdbd; background: rgba(128,128,128,.25); }
+
+    /* Orchestration node-type pills (child rows) */
+    .run-badge.type-nodestep {
+      min-width: 64px;
+      background: rgba(96, 125, 139, 0.14);
+      border-color: rgba(96, 125, 139, 0.45);
+      color: #455a64;
+    }
+    .run-badge.type-nodestep-execute,
+    .run-badge.type-nodestep-script {
+      background: rgba(33, 150, 243, 0.14);
+      border-color: rgba(33, 150, 243, 0.45);
+      color: #1565c0;
+    }
+    .run-badge.type-nodestep-http {
+      background: rgba(0, 150, 136, 0.14);
+      border-color: rgba(0, 150, 136, 0.45);
+      color: #00695c;
+    }
+    .run-badge.type-nodestep-plugin {
+      background: rgba(123, 31, 162, 0.14);
+      border-color: rgba(123, 31, 162, 0.45);
+      color: #6a1b9a;
+    }
+    .run-badge.type-nodestep-condition,
+    .run-badge.type-nodestep-decision {
+      background: rgba(255, 152, 0, 0.16);
+      border-color: rgba(255, 152, 0, 0.5);
+      color: #e65100;
+    }
+    .run-badge.type-nodestep-split-join,
+    .run-badge.type-nodestep-split,
+    .run-badge.type-nodestep-join {
+      background: rgba(63, 81, 181, 0.14);
+      border-color: rgba(63, 81, 181, 0.45);
+      color: #283593;
+    }
+    .run-badge.type-nodestep-start {
+      background: rgba(76, 175, 80, 0.16);
+      border-color: rgba(76, 175, 80, 0.5);
+      color: #2e7d32;
+    }
+    .run-badge.type-nodestep-end-success {
+      background: rgba(76, 175, 80, 0.16);
+      border-color: rgba(76, 175, 80, 0.5);
+      color: #2e7d32;
+    }
+    .run-badge.type-nodestep-end-failure,
+    .run-badge.type-nodestep-end-fail {
+      background: rgba(244, 67, 54, 0.14);
+      border-color: rgba(244, 67, 54, 0.45);
+      color: #c62828;
+    }
+    body.dark .run-badge.type-nodestep { color: #b0bec5; background: rgba(96,125,139,.3); }
+    body.dark .run-badge.type-nodestep-execute,
+    body.dark .run-badge.type-nodestep-script { color: #90caf9; background: rgba(33,150,243,.28); }
+    body.dark .run-badge.type-nodestep-http { color: #80cbc4; background: rgba(0,150,136,.28); }
+    body.dark .run-badge.type-nodestep-plugin { color: #ce93d8; background: rgba(123,31,162,.28); }
+    body.dark .run-badge.type-nodestep-condition,
+    body.dark .run-badge.type-nodestep-decision { color: #ffcc80; background: rgba(255,152,0,.28); }
+    body.dark .run-badge.type-nodestep-split-join,
+    body.dark .run-badge.type-nodestep-split,
+    body.dark .run-badge.type-nodestep-join { color: #9fa8da; background: rgba(63,81,181,.28); }
+
+
+    /* Soften history table to feel closer to index recent list */
+    #historyTable tbody tr.toggle-row td {
+      padding-top: 10px;
+      padding-bottom: 10px;
+      vertical-align: middle;
+    }
+    #historyTable tbody tr.group-header td {
+      padding-top: 12px;
+      padding-bottom: 8px;
+      font-weight: 600;
+      opacity: 0.9;
+    }
+    #historyTable tbody tr.orch-child-expand td:first-child,
+    #historyTable tbody tr[class*="orch-child-"] td:first-child {
+      padding-left: 28px;
+    }
   </style>
   <script>
 
@@ -569,7 +742,7 @@ tbody tr.orch-expanded td {
   
       <div class="container">
         <div class="logstable">
-        <table>
+        <table id="historyTable">
           <thead>
             <th class="jobType">Icon</th>
             <th class="jobName">

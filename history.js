@@ -496,6 +496,8 @@ async function getItemsGroupedByOrchestration() {
     let orchestrationDescriptions = {};
     let orchestrationIcons = {};
     let orchestrationColors = {};
+    // nodeId -> { type, label, description } per job (from latest definition)
+    let orchestrationNodeMeta = {};
     try {
         const allOrchestrations = await definitionStore.listOrchestrations();
         if (allOrchestrations) {
@@ -504,6 +506,24 @@ async function getItemsGroupedByOrchestration() {
                 orchestrationDescriptions[jobId] = jobData.description || '';
                 orchestrationIcons[jobId] = jobData.icon || 'schema';
                 orchestrationColors[jobId] = jobData.color || '#000000';
+
+                const nodeMap = {};
+                let nodes = jobData.nodes || [];
+                if ((!nodes || !nodes.length) && Array.isArray(jobData.versions) && jobData.versions.length) {
+                    const ver = jobData.versions[jobData.versions.length - 1];
+                    nodes = (ver && ver.nodes) || [];
+                }
+                (nodes || []).forEach(function (n) {
+                    if (!n || !n.id) return;
+                    nodeMap[n.id] = {
+                        type: n.type || '',
+                        label: n.label || n.name || n.alias || '',
+                        description: n.description || '',
+                        script: (n.config && (n.config.scriptName || n.config.script)) || n.scriptName || '',
+                        plugin: (n.config && (n.config.pluginId || n.config.plugin)) || n.pluginId || ''
+                    };
+                });
+                orchestrationNodeMeta[jobId] = nodeMap;
             }
         }
     } catch (err) {
@@ -548,6 +568,15 @@ async function getItemsGroupedByOrchestration() {
             }
             
             const orchData = orchestrationMap.get(mapKey);
+            // Enrich child with node type / label from current definition (for history pills)
+            const meta = (orchestrationNodeMeta[jobId] || {})[nodeId] || {};
+            item.nodeId = nodeId;
+            if (meta.type) item.nodeType = meta.type;
+            if (meta.label && !item.nodeAlias) item.nodeAlias = meta.label;
+            if (meta.label) item.nodeLabel = meta.label;
+            if (meta.description) item.nodeDescription = meta.description;
+            if (meta.script) item.nodeScript = meta.script;
+            if (meta.plugin) item.nodePlugin = meta.plugin;
             orchData.nodeMap.set(nodeId, item);
         } else {
             regularItems.push(item);
