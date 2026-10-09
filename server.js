@@ -4865,20 +4865,39 @@ app.get('/orchestrationBuilder.html', User.isAuthenticated, User.requireAnyPermi
   const jobId = req.query.id; // undefined for new jobs, or specific ID for editing
   var color = "#FF9800";
   var icon = "workspaces";
+  var jobName = '';
+  var jobDescription = '';
 
-  if(jobId !== undefined){
-    const job = await orchestration.getJob(jobId);
-    color = job.color;
-    icon = job.icon;
+  if (jobId !== undefined && jobId !== '') {
+    try {
+      const job = await orchestration.getJob(jobId);
+      if (job) {
+        color = job.color || color;
+        icon = job.icon || icon;
+        jobName = job.name || '';
+        jobDescription = job.description || '';
+      }
+    } catch (e) {
+      logger.warn(`Could not load orchestration [${jobId}] for builder: ${e.message}`);
+    }
   }
 
-  res.render('orchestrationBuilder', { 
+  // Drawflow is now the primary orchestration builder UI
+  res.render('orchestrationBuilderDrawflow', {
     csrfToken: req.csrfToken(),
-    icons:serverConfig.job_icons,
+    icons: serverConfig.job_icons,
     jobId: jobId || '',
+    jobName: jobName,
+    jobDescription: jobDescription,
     color: color,
     icon: icon
   });
+}));
+
+// Legacy Drawflow URL — redirect to canonical builder path
+app.get('/orchestrationBuilderDrawflow.html', User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.ORCHESTRATIONS_CREATE, PERMISSIONS.ORCHESTRATIONS_EDIT]), asyncHandler(async (req, res) => {
+  const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  res.redirect(302, '/orchestrationBuilder.html' + q);
 }));
 
 // In-memory cache for in-progress orchestration executions
@@ -4943,19 +4962,24 @@ app.get('/orchestration/monitor.html', User.isAuthenticated, User.requirePermiss
   const jobId = req.query.jobId;
   let executionIndex = req.query.executionIndex || 'latest';
   const executionId = req.query.executionId;
-  
+
   if (!jobId) {
     return res.status(400).send('Job ID is required');
   }
-  
-  // If executionId is provided, we'll let the client handle it
-  // The JavaScript will read it from URL params and pass it to the API
-  res.render('orchestrationMonitor', { 
+
+  // Drawflow is now the primary orchestration monitor UI
+  res.render('orchestrationMonitorDrawflow', {
     csrfToken: req.csrfToken(),
     jobId: jobId,
     executionIndex: executionIndex,
-    executionId: executionId  // Pass executionId to template so it can be used in initial load
+    executionId: executionId
   });
+}));
+
+// Legacy Drawflow monitor URL — redirect to canonical monitor path
+app.get('/orchestrationMonitorDrawflow.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
+  const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  res.redirect(302, '/orchestration/monitor.html' + q);
 }));
 
 app.get('/orchestration/execution/details', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {

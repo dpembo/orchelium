@@ -1,0 +1,1293 @@
+<%
+function isSelected(inValue, compareValue) {
+  if (inValue == compareValue) return 'selected';
+  return '';
+}
+%>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0"/>
+  <title>Orchelium | Orchestration Builder</title>
+  <%- include('./partials/_head'); %>
+  <%- include('./partials/_scripts'); %>
+  <link rel="stylesheet" href="/css/drawflow.min.css?v=df7">
+  <link rel="stylesheet" href="/css/spectrum/spectrum.min.css">
+  <script src="/js/spectrum/spectrum.min.js"></script>
+  <link rel="stylesheet" href="/css/orchestration-drawflow.css?v=df33">
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    /* Fill remaining viewport under the global app header */
+    #orchestration-container {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: calc(100vh - 64px);
+      max-height: calc(100vh - 64px);
+      overflow: hidden;
+      margin: 0;
+      box-sizing: border-box;
+    }
+    #orchestration-header {
+      position: relative;
+      top: -5px;
+      background: #f5f5f5;
+      padding: 15px 20px;
+      border-bottom: 1px solid #ddd;
+      flex: 0 0 auto;
+      min-height: 52px;
+      box-sizing: border-box;
+    }
+    body.dark #orchestration-header { background: #1f2430; border-color: #3e4658; }
+    #header-buttonss { position: absolute; top: 15px; right: 20px; }
+    #orch-name-display {
+      cursor: pointer;
+      border-radius: 4px;
+      transition: background 0.2s;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 2px 6px;
+    }
+    #orch-name-display:hover { background: rgba(33, 150, 243, 0.1); }
+    #orch-name-text { font-size: 16px; font-weight: 600; line-height: 1.2; }
+    #orch-desc-text {
+      font-size: 13px;
+      color: #666;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 400px;
+    }
+    body.dark #orch-desc-text { color: #9aa3b5; }
+    #orch-name-edit { display: none; }
+    #orchestration-header.name-edit-mode #orch-name-display { display: none; }
+    #orchestration-header.name-edit-mode #orch-name-edit {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      flex-direction: column;
+    }
+    #orch-name-input {
+      padding: 5px 8px;
+      border: 2px solid #2196f3;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      width: 300px;
+      max-width: 40vw;
+      background: #fff;
+      color: #333;
+    }
+    #orch-desc-input {
+      padding: 5px 8px;
+      border: 2px solid #2196f3;
+      border-radius: 4px;
+      font-size: 13px;
+      width: 300px;
+      max-width: 40vw;
+      height: 50px;
+      resize: vertical;
+      background: #fff;
+      color: #333;
+    }
+    body.dark #orch-name-input,
+    body.dark #orch-desc-input {
+      background: #23272e;
+      color: #e0e0e0;
+      border-color: #42a5f5;
+    }
+    .orch-edit-buttons { display: flex; gap: 6px; }
+    #orchestration-header {
+      overflow: visible !important;
+    }
+    #orchestration-header h3 {
+      overflow: visible !important;
+    }
+    #orch-icon-edit {
+      position: absolute;
+      z-index: 5000;
+      background: #fff;
+      left: 0;
+      top: 32px;
+      display: none;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+      min-width: 280px;
+      max-width: 320px;
+    }
+    #orch-icon-edit.open {
+      display: block !important;
+    }
+    #orch-icon-edit .select-wrapper {
+      width: 100%;
+      margin-bottom: 8px;
+    }
+    #orch-icon-edit .dropdown-content li {
+      min-height: 36px;
+      line-height: 36px;
+    }
+    #orch-icon-edit .dropdown-content li > span {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #333;
+    }
+    body.dark #orch-icon-edit .dropdown-content li > span {
+      color: #e0e6f0;
+    }
+    #orch-icon-edit .dropdown-content li i.material-icons {
+      font-size: 20px;
+      margin-right: 8px;
+      color: #ff9800;
+      position: relative;
+      top: 0;
+    }
+    #orch-icon-edit .sp-replacer {
+      position: relative;
+      left: 0;
+      top: 0;
+      margin-bottom: 8px;
+    }
+    body.dark #orch-icon-edit {
+      background: #252b36;
+      border-color: #3e4658;
+      color: #e0e6f0;
+    }
+    body.dark #orch-icon-edit input,
+    body.dark #orch-icon-edit select,
+    body.dark #orch-icon-edit select.browser-default {
+      background: #1a1d24 !important;
+      color: #e0e6f0 !important;
+      border-color: #3e4658 !important;
+    }
+    #orchestration-header h3 {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      line-height: 1.2 !important;
+      font-size: inherit;
+      font-weight: normal;
+      min-height: 36px;
+    }
+    #orch-icon-display {
+      display: flex !important;
+      align-items: center;
+      height: 28px;
+      position: relative;
+      flex: 0 0 auto;
+      overflow: visible !important;
+    }
+    #orch-icon-element {
+      font-size: 24px !important;
+      line-height: 1 !important;
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #orch-icon-indicator {
+      font-size: 12px !important;
+      line-height: 1 !important;
+      position: absolute !important;
+      left: 14px !important;
+      top: 14px !important;
+      color: #333 !important;
+      pointer-events: none;
+    }
+    body.dark #orch-icon-indicator { color: #e0e6f0 !important; }
+    .header-toolbar { display: inline-flex; align-items: center; gap: 6px; padding: 4px; border: 1px solid #c9d1db; border-radius: 8px; background: #f6f8fb; }
+    body.dark .header-toolbar { background: #2a3140; border-color: #3e4658; }
+    .header-action-btn { border: none; background: transparent; padding: 6px 10px; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; color: #333; }
+    body.dark .header-action-btn { color: #e0e6f0; }
+    .header-action-btn.toolbar-primary { background: #ff9800; color: #fff; border-radius: 4px; }
+    /* Main row must be able to shrink so the canvas gets real height */
+    #orchestration-main {
+      display: flex;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #orchestration-palette {
+      width: 250px;
+      border-right: 1px solid #ddd;
+      overflow-y: auto;
+      padding: 15px;
+      flex: 0 0 250px;
+      min-height: 0;
+    }
+    body.dark #orchestration-palette { border-color: #3e4658; background: #1a1d24; }
+    #orchestration-canvas {
+      flex: 1 1 auto;
+      position: relative;
+      overflow: hidden;
+      min-width: 0;
+      min-height: 0;
+    }
+    #orchestration-canvas #drawflow {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+    #orchestration-properties { width: 320px; max-width: 90vw; border-left: 1px solid #ddd; background: #f5f5f5; overflow-y: auto; padding: 15px; position: fixed; right: 0; top: 130px; bottom: 48px; transform: translateX(100%); transition: transform 0.3s; z-index: 200; box-sizing: border-box; }
+    #orchestration-properties.show { transform: translateX(0); }
+    body.dark #orchestration-properties { background: #1f2430; color: #e0e6f0; border-left-color: #3e4658; }
+    #zoom-controls { position: fixed; bottom: 80px; right: 20px; background: #fff; border: 1px solid #ddd; border-radius: 4px; display: flex; gap: 5px; padding: 8px; z-index: 100; }
+    body.dark #zoom-controls { background: #252b36; border-color: #3e4658; }
+    #zoom-controls.shift-left { right: 320px; }
+    #zoom-controls button { width: 32px; height: 32px; border: 1px solid #ddd; background: #fff; border-radius: 3px; cursor: pointer; font-weight: bold; }
+    body.dark #zoom-controls button { background: #1f2430; border-color: #3e4658; color: #e0e6f0; }
+    #zoom-level { min-width: 50px; text-align: center; line-height: 32px; font-size: 12px; color: #666; }
+    .palette-item { padding: 10px; margin-bottom: 8px; border: 1px solid #e0e0e0; border-radius: 4px; cursor: move; display: flex; align-items: center; gap: 8px; font-size: 13px; background: #fff; }
+    body.dark .palette-item { background: #252b36; border-color: #3e4658; color: #e0e6f0; }
+    .palette-item:hover { border-color: #ff9800; }
+    .palette-section { margin-bottom: 20px; }
+    .palette-section h4 { margin: 5px 0 10px; font-size: 12px; color: #666; text-transform: uppercase; }
+    body.dark .palette-section h4 { color: #9aa3b5; }
+    #palette-filter { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 12px; margin-bottom: 12px; }
+    body.dark #palette-filter { background: #23272e; color: #e0e0e0; border-color: #444; }
+    #orchestration-footer { background: #f5f5f5; padding: 8px 20px; border-top: 1px solid #ddd; display: flex; justify-content: space-between; flex: 0 0 auto; }
+    body.dark #orchestration-footer { background: #1f2430; border-color: #3e4658; color: #e0e6f0; }
+    .properties-section { margin-bottom: 16px; }
+    .properties-section label { font-size: 11px; font-weight: 600; color: #666; display: block; margin-bottom: 6px; text-transform: uppercase; }
+    body.dark .properties-section label { color: #9aa3b5; }
+    .properties-section input, .properties-section select, .properties-section textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 13px; box-sizing: border-box; }
+    body.dark .properties-section input, body.dark .properties-section select, body.dark .properties-section textarea { background: #23272e; color: #e0e0e0; border-color: #444; }
+    .delete-btn { width: 100%; margin-top: 12px; background: #f44336; color: #fff; border: none; padding: 10px; border-radius: 4px; cursor: pointer; }
+    #properties-empty { text-align: center; color: #999; padding: 40px 10px; }
+
+    /* Force native selects — Materialize hides <select class="browser-default"> and breaks the side panel */
+    #orchestration-properties select {
+      display: block !important;
+      visibility: visible !important;
+      opacity: 1 !important;
+      position: relative !important;
+      height: auto !important;
+      width: 100% !important;
+      max-width: 100%;
+      padding: 8px !important;
+      margin: 0 !important;
+      border: 1px solid #ddd !important;
+      border-radius: 4px !important;
+      background-color: #fff !important;
+      color: #333 !important;
+      font-size: 13px !important;
+      line-height: 1.4 !important;
+      appearance: auto !important;
+      -webkit-appearance: menulist !important;
+      -moz-appearance: menulist !important;
+      cursor: pointer;
+      box-sizing: border-box;
+    }
+    body.dark #orchestration-properties select {
+      background-color: #23272e !important;
+      color: #e0e0e0 !important;
+      border-color: #444 !important;
+    }
+    /* If Materialize wrapped a select, show the native control and hide the fake UI */
+    #orchestration-properties .select-wrapper {
+      display: block !important;
+      width: 100%;
+    }
+    #orchestration-properties .select-wrapper input.select-dropdown,
+    #orchestration-properties .select-wrapper .caret,
+    #orchestration-properties .select-wrapper ul.dropdown-content {
+      display: none !important;
+    }
+    #orchestration-properties .select-wrapper select {
+      display: block !important;
+    }
+
+    /* Context menu */
+    #canvas-context-menu {
+      display: none;
+      position: fixed;
+      z-index: 10000;
+      min-width: 180px;
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+      padding: 6px 0;
+      font-size: 13px;
+    }
+    body.dark #canvas-context-menu { background: #252b36; border-color: #3e4658; color: #e0e6f0; }
+    .ctx-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      cursor: pointer;
+      color: #333;
+      user-select: none;
+    }
+    body.dark .ctx-menu-item { color: #e0e6f0; }
+    .ctx-menu-item:hover:not(.ctx-disabled) { background: #f0f2f5; }
+    body.dark .ctx-menu-item:hover:not(.ctx-disabled) { background: #2e3544; }
+    .ctx-menu-item.ctx-disabled { opacity: 0.4; pointer-events: none; }
+    .ctx-menu-item .material-icons { font-size: 18px; color: #666; }
+    body.dark .ctx-menu-item .material-icons { color: #9aa3b5; }
+    .ctx-menu-item.ctx-danger { color: #f44336; }
+    .ctx-menu-item.ctx-danger .material-icons { color: #f44336; }
+    .ctx-menu-separator { height: 1px; background: #e0e0e0; margin: 4px 0; }
+    body.dark .ctx-menu-separator { background: #3e4658; }
+  </style>
+</head>
+<body>
+  <%- include('./partials/_header'); %>
+
+  <div id="orchestration-container">
+        <div id="orchestration-header">
+      <h3>
+        <div style="display: flex; align-items: center; gap: 5px; cursor: pointer; position: relative;" id="orch-icon-display" title="Click to edit orchestration icon and color">
+          <i id="orch-icon-element" class="material-icons" style="color: <%= typeof color !== 'undefined' ? color : '#FF9800' %>; font-size: 24px;" onclick="toggleIconEdit(event)"><%= typeof icon !== 'undefined' ? icon : 'workspaces' %></i>
+          <i id="orch-icon-indicator" class="material-icons" style="color: #000000; font-size:14px; position: relative; left: -14px; top: 11px;" onclick="toggleIconEdit(event)">schema</i>
+          <div id="orch-icon-edit">
+            <label style="font-size: 11px; color: #999; text-transform: uppercase; display: block; margin-bottom: 4px;">Icon Name</label>
+            <input type="hidden" id="orch-icon-input" value="<%= typeof icon !== 'undefined' ? icon : 'workspaces' %>">
+            <select id="icon_select" name="icon" onchange="updateIconPreview(this);">
+              <option value="" disabled>Select Icon</option>
+              <%
+                var iconList = (typeof icons !== 'undefined' && icons && icons.length) ? icons : [
+                  'workspaces','backup','cloud','dns','storage','folder','settings','schedule','play_arrow','build','security','monitoring'
+                ];
+                for (var iconCount = 0; iconCount < iconList.length; iconCount++) {
+              %>
+                  <option data-icon="<%= iconList[iconCount] %>" value="<%= iconList[iconCount] %>" <%= isSelected(iconList[iconCount], typeof icon !== 'undefined' ? icon : 'workspaces') %>><%= iconList[iconCount] %></option>
+              <% } %>
+            </select>
+            <label style="font-size: 11px; color: #999; text-transform: uppercase; display: block; margin-bottom: 8px; margin-top: 10px;">Colour (hex code)</label>
+            <input type="hidden" id="orch-color-input" value="<%= typeof color !== 'undefined' ? color : '#FF9800' %>">
+            <input onchange="setOrchColor(this.value);" type="text" value="<%= typeof color !== 'undefined' ? color : '#FF9800' %>" id="colour" name="colour" required style="width:100%;padding:6px;border:1px solid #ddd;border-radius:3px;box-sizing:border-box;margin-bottom:8px;">
+            <input type="text" id="picker" name="picker" value="<%= typeof color !== 'undefined' ? color : '#FF9800' %>">
+            <div class="orch-edit-buttons" style="gap: 4px; margin-top: 10px;">
+              <button type="button" onclick="saveIconEdit()" style="background:#4caf50;color:#fff;border:none;padding:6px 12px;border-radius:3px;cursor:pointer;font-size:11px;flex:1;">Save</button>
+              <button type="button" onclick="cancelIconEdit()" style="background:#999;color:#fff;border:none;padding:6px 12px;border-radius:3px;cursor:pointer;font-size:11px;flex:1;">Cancel</button>
+            </div>
+          </div>
+        </div>
+        <div id="orch-name-display" title="Click to edit orchestration name" onclick="enterNameEditMode()" role="button" tabindex="0">
+          <span id="orch-name-text"><%= (typeof jobName !== 'undefined' && jobName) ? jobName : 'Orchestration' %></span>
+          <span id="orch-desc-text"><%= (typeof jobDescription !== 'undefined' && jobDescription) ? jobDescription : 'No Description' %></span>
+        </div>
+        <div id="orch-name-edit">
+          <div>
+            <label style="font-size: 11px; color: #999; text-transform: uppercase; display: block; margin-bottom: 4px;">Name</label>
+            <input type="text" id="orch-name-input" placeholder="Orchestration name...">
+          </div>
+          <div>
+            <label style="font-size: 11px; color: #999; text-transform: uppercase; display: block; margin-bottom: 4px;">Description</label>
+            <textarea id="orch-desc-input" placeholder="Optional description..."></textarea>
+          </div>
+          <div class="orch-edit-buttons">
+            <button type="button" onclick="saveOrchestrationName()" style="background:#4caf50;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;font-size:12px;">Save</button>
+            <button type="button" onclick="cancelNameEdit()" style="background:#999;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;font-size:12px;">Cancel</button>
+          </div>
+        </div>
+      </h3>
+      <div id="header-buttonss">
+        <div class="header-toolbar">
+          <button type="button" class="header-action-btn" id="undo-btn" title="Undo" onclick="OrchEditor.undo()"><i class="material-icons" style="font-size:16px;">undo</i></button>
+          <button type="button" class="header-action-btn" id="redo-btn" title="Redo" onclick="OrchEditor.redo()"><i class="material-icons" style="font-size:16px;">redo</i></button>
+          <button type="button" class="header-action-btn" id="btn-auto-layout" title="Auto Layout" onclick="if (window.OrchEditor && OrchEditor.autoLayout) OrchEditor.autoLayout(); else console.error('OrchEditor.autoLayout missing — hard-refresh to load latest editor.js')"><i class="material-icons" style="font-size:16px;">auto_fix_high</i></button>
+          <button type="button" class="header-action-btn" onclick="listSchedulesForOrchestration()" title="View schedules that use this orchestration"><i class="material-icons" style="font-size:16px;">list</i> List Jobs</button>
+          <button type="button" class="header-action-btn" onclick="runOrchestration()" title="Execute the orchestration"><i class="material-icons" style="font-size:16px;">play_arrow</i> Run</button>
+          <button type="button" class="header-action-btn" onclick="cancelOrchestrationChanges()" title="Discard changes and return to list"><i class="material-icons" style="font-size:16px;">cancel</i> Cancel</button>
+          <button type="button" class="header-action-btn" id="export-button" onclick="exportCurrentOrchestration()" title="Save this orchestration before exporting" disabled><i class="material-icons" style="font-size:16px;">file_download</i> Export</button>
+          <button type="button" class="header-action-btn toolbar-primary" onclick="saveOrchestration()"><i class="material-icons" style="font-size:16px;">save</i> Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="orchestration-main">
+      <div id="orchestration-palette">
+        <input id="palette-filter" type="text" placeholder="Filter nodes..." autocomplete="off">
+        <div class="palette-section">
+          <h4>Terminals</h4>
+          <div class="palette-item" draggable="true" data-node-type="start"><i class="material-icons" style="color:#4caf50;">play_arrow</i><span>Start</span></div>
+          <div class="palette-item" draggable="true" data-node-type="end-success"><i class="material-icons" style="color:#4caf50;">check_circle</i><span>Success</span></div>
+          <div class="palette-item" draggable="true" data-node-type="end-failure"><i class="material-icons" style="color:#f44336;">error</i><span>Failure</span></div>
+        </div>
+        <div class="palette-section">
+          <h4>Logic</h4>
+          <div class="palette-item" draggable="true" data-node-type="condition"><i class="material-icons" style="color:#7b1fa2;">call_split</i><span>Condition (if)</span></div>
+          <div class="palette-item" draggable="true" data-node-type="split-join"><i class="material-icons" style="color:#009688;">account_tree</i><span>Split / Join</span></div>
+        </div>
+        <div class="palette-section">
+          <h4>Core Steps</h4>
+          <div class="palette-item" draggable="true" data-node-type="execute"><i class="material-icons">settings</i><span>Execute Script</span></div>
+          <div class="palette-item" draggable="true" data-node-type="execute-http"><i class="material-icons">http</i><span>HTTP Request</span></div>
+          <div class="palette-item" draggable="true" data-node-type="wait"><i class="material-icons">schedule</i><span>Wait</span></div>
+          <div class="palette-item" draggable="true" data-node-type="notify"><i class="material-icons">notifications</i><span>Notify</span></div>
+        </div>
+        <div class="palette-section" id="plugin-palette-section" style="display:none;">
+          <h4>Integration Steps</h4>
+          <div id="plugin-palette-items"></div>
+        </div>
+        <p style="font-size:11px;color:#999;margin-top:16px;">Drag nodes onto the canvas. Connect from output (right) to input (left).</p>
+      </div>
+
+      <div id="orchestration-canvas"><div id="drawflow"></div></div>
+
+      <div id="orchestration-properties">
+        <div id="properties-empty" style="text-align: center; color: #999;">
+          <p><i class="material-icons" style="font-size: 48px; display: block; margin-bottom: 10px; color: #ddd;">touch_app</i></p>
+          <p><strong>Select a node</strong> on the canvas to edit its properties</p>
+        </div>
+        <div id="properties-content" style="display: none;">
+          <div class="properties-section">
+            <button onclick="closeDetailsPanel()" class="details-close-btn" id="detailsClose" title="Close">&times;</button>
+            <label>Node Type</label>
+            <p id="prop-type" style="margin: 5px 0; font-size: 13px; color: #333;"></p>
+          </div>
+
+          <div id="prop-action-name-section" class="properties-section" style="display: none;">
+            <label for="prop-action-name">Name (optional)</label>
+            <input type="text" id="prop-action-name" placeholder="Custom display name...">
+            <div style="margin-top: 4px; font-size: 0.82em; color: var(--text-muted, #888);">
+              Template alias: <code id="prop-alias-display" style="font-size: 0.9em;"></code>
+            </div>
+          </div>
+          
+          <div id="prop-execute" style="display: none;">
+            <div class="properties-section">
+              <label for="prop-execute-type">Execute Type</label>
+              <select class="browser-default" id="prop-execute-type">
+                <option value="script">Script</option>
+                <option value="http">HTTP Request</option>
+              </select>
+            </div>
+
+            <div id="prop-execute-script-fields">
+            <div class="properties-section">
+              <label for="prop-script">Script</label>
+              <select class="browser-default" id="prop-script"></select>
+            </div>
+            <div class="properties-section">
+              <label for="prop-agent">Target Agent</label>
+              <select class="browser-default" id="prop-agent"></select>
+            </div>
+            <div class="properties-section" id="prop-script-info">
+              <div id="prop-script-info-detail"></div>
+            </div>
+            <div class="properties-section">
+              <label for="prop-params">Parameters</label>
+              <textarea id="prop-params" placeholder="Enter command parameters or custom command"></textarea>
+            </div>
+            <div class="properties-section">
+              <label for="prop-script-timeout">Timeout (ms)</label>
+              <input type="number" id="prop-script-timeout" min="1000" step="1000" placeholder="3600000" title="Script execution timeout in milliseconds">
+            </div>
+            </div>
+
+            <div id="prop-execute-http-fields" style="display: none;">
+              <div class="properties-section">
+                <label for="prop-http-method">Method</label>
+                <select class="browser-default" id="prop-http-method">
+                  <option value="GET">GET</option>
+                  <option value="POST">POST</option>
+                  <option value="PUT">PUT</option>
+                  <option value="PATCH">PATCH</option>
+                  <option value="DELETE">DELETE</option>
+                  <option value="HEAD">HEAD</option>
+                  <option value="OPTIONS">OPTIONS</option>
+                </select>
+              </div>
+              <div class="properties-section">
+                <label for="prop-http-url">URL</label>
+                <input type="text" id="prop-http-url" placeholder="https://api.example.com/v1/resource">
+              </div>
+              <div class="properties-section">
+                <label for="prop-http-timeout">Timeout (ms)</label>
+                <input type="number" id="prop-http-timeout" min="1000" step="1000" placeholder="30000">
+              </div>
+              <div class="properties-section">
+                <label for="prop-http-auth-type">Authentication</label>
+                <select class="browser-default" id="prop-http-auth-type">
+                  <option value="none">None</option>
+                  <option value="bearer">Bearer Token</option>
+                  <option value="basic">Basic Auth</option>
+                  <option value="apiKey">API Key Header</option>
+                </select>
+              </div>
+              <div class="properties-section" id="prop-http-auth-bearer-section" style="display: none;">
+                <label for="prop-http-auth-bearer">Bearer Token</label>
+                <input type="text" id="prop-http-auth-bearer" placeholder="#{webhook.payload.token}">
+              </div>
+              <div id="prop-http-auth-basic-section" style="display: none;">
+                <div class="properties-section">
+                  <label for="prop-http-auth-user">Basic Username</label>
+                  <input type="text" id="prop-http-auth-user" placeholder="api-user">
+                </div>
+                <div class="properties-section">
+                  <label for="prop-http-auth-pass">Basic Password</label>
+                  <input type="password" id="prop-http-auth-pass" placeholder="password or #{...}">
+                </div>
+              </div>
+              <div id="prop-http-auth-apikey-section" style="display: none;">
+                <div class="properties-section">
+                  <label for="prop-http-auth-apikey-header">API Key Header Name</label>
+                  <input type="text" id="prop-http-auth-apikey-header" placeholder="X-API-Key">
+                </div>
+                <div class="properties-section">
+                  <label for="prop-http-auth-apikey-value">API Key Value</label>
+                  <input type="password" id="prop-http-auth-apikey-value" placeholder="#{webhook.payload.apiKey}">
+                </div>
+              </div>
+              <div class="properties-section">
+                <label for="prop-http-headers">Headers (one per line: Header: Value)</label>
+                <textarea id="prop-http-headers" placeholder="Accept: application/json&#10;Content-Type: application/json"></textarea>
+              </div>
+              <div class="properties-section">
+                <label for="prop-http-body">Body (optional)</label>
+                <textarea id="prop-http-body" placeholder='{"example": "value"}'></textarea>
+              </div>
+            </div>
+          </div>
+          
+          <div id="prop-condition" style="display: none;">
+            <div class="properties-section">
+              <label for="prop-condition-source-alias">Source Node</label>
+              <select class="browser-default" id="prop-condition-source-alias">
+                <option value="">Previous node (default)</option>
+              </select>
+            </div>
+            <div class="properties-section">
+              <label for="prop-condition-type">Test Type</label>
+              <select class="browser-default" id="prop-condition-type">
+                <option value="return_code">Return Code</option>
+                <option value="output_contains">Output Contains</option>
+                <option value="regex_match">Regex Match</option>
+                <option value="execution_time">Execution Time (seconds)</option>
+                <option value="json_value">JSON Value</option>
+              </select>
+            </div>
+            <div class="properties-section" id="prop-condition-path-section" style="display: none;">
+              <label for="prop-condition-path">JSON Path</label>
+              <input type="text" id="prop-condition-path" placeholder="e.g. result.count or items[0].status">
+            </div>
+            <div class="properties-section">
+              <label for="prop-condition-operator">Operator</label>
+              <select class="browser-default" id="prop-condition-operator">
+                <option value="==">== (equals)</option>
+                <option value="!=">!= (not equals)</option>
+                <option value="&gt;">&gt; (greater than)</option>
+                <option value="!&gt;">!&gt; (not greater than)</option>
+                <option value="&gt;=">&gt;= (greater or equal)</option>
+                <option value="!>=">!&gt;= (not greater or equal)</option>
+                <option value="&lt;">&lt; (less than)</option>
+                <option value="!&lt;">!&lt; (not less than)</option>
+                <option value="&lt;=">&lt;= (less or equal)</option>
+                <option value="!&lt;=">!&lt;= (not less or equal)</option>
+              </select>
+              <small style="color: #999; margin-top: 5px; display: block;">For Output Contains, only equals/not equals are used</small>
+            </div>
+            <div class="properties-section">
+              <label for="prop-condition-value">Value</label>
+              <input type="text" id="prop-condition-value" placeholder="Enter value..." title="For regex, enter a valid regex pattern. For numeric, enter a number.">
+            </div>
+          </div>
+
+          <div id="prop-split-join" style="display: none;">
+            <div class="properties-section">
+              <label for="prop-sj-mode">Mode</label>
+              <select class="browser-default" id="prop-sj-mode">
+                <option value="split">Split (fan-out)</option>
+                <option value="join">Join (merge paths)</option>
+              </select>
+            </div>
+            <div class="properties-section" id="prop-sj-join-strategy-section">
+              <label for="prop-sj-join-strategy">Join Strategy</label>
+              <select class="browser-default" id="prop-sj-join-strategy">
+                <option value="waitAll">Wait For All</option>
+                <option value="waitAny">Wait For First</option>
+              </select>
+            </div>
+            <div class="properties-section" id="prop-sj-error-policy-section">
+              <label for="prop-sj-error-policy">Error Policy</label>
+              <select class="browser-default" id="prop-sj-error-policy">
+                <option value="waitForAll">Wait For All Paths</option>
+                <option value="failFast">Fail Fast</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="prop-wait" style="display: none;">
+            <div class="properties-section">
+              <label for="prop-wait-seconds">Delay (seconds)</label>
+              <input type="number" id="prop-wait-seconds" min="0.1" step="0.1" placeholder="5">
+            </div>
+          </div>
+
+          <div id="prop-notify" style="display: none;">
+            <div class="properties-section">
+              <label for="prop-notify-type">Notification Type</label>
+              <select class="browser-default" id="prop-notify-type">
+                <option value="INFORMATION">Information</option>
+                <option value="WARNING">Warning</option>
+                <option value="ERROR">Error</option>
+              </select>
+            </div>
+            <div class="properties-section">
+              <label for="prop-notify-title">Title</label>
+              <input type="text" id="prop-notify-title" placeholder="Orchestration Step Complete">
+            </div>
+            <div class="properties-section">
+              <label for="prop-notify-body">Message</label>
+              <textarea id="prop-notify-body" placeholder="Notification message (supports #{...} templates)"></textarea>
+            </div>
+            <div class="properties-section">
+              <label for="prop-notify-url">Link (optional)</label>
+              <input type="text" id="prop-notify-url" placeholder="/orchestration/monitor.html?...">
+            </div>
+          </div>
+          
+          <div id="prop-start" style="display: none; margin-bottom: 20px;">
+            <label for="prop-start-terminate-on-error" style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; margin-bottom: 8px;">
+              <input type="checkbox" id="prop-start-terminate-on-error" style="all: revert; width: 14px; height: 14px; flex-shrink: 0; cursor: pointer; margin: 0; accent-color: #2196f3;">
+              Terminate immediately on any step failure
+            </label>
+            <small style="color: #999; display: block; font-size: 11px; white-space: pre-wrap;">When checked, the orchestration stops as soon as any step returns a non-zero exit code.
+When unchecked (default), execution continues through the graph to a Success or Failure end node.</small>
+          </div>
+
+          <div id="prop-end" style="display: none;">
+            <div class="properties-section">
+              <label>End Type</label>
+              <div id="prop-end-type-display" style="padding: 8px; border-radius: 3px; color: #333; font-weight: 500;"></div>
+            </div>
+          </div>
+
+          <div id="prop-plugin" style="display: none;">
+            <div class="properties-section">
+              <label>Plugin</label>
+              <div id="prop-plugin-name-display" style="padding: 8px; border-radius: 3px; color: #333; font-weight: 500; font-family: monospace; font-size: 13px;"></div>
+            </div>
+            <div class="properties-section">
+              <label for="prop-plugin-agent">Agent</label>
+              <select class="browser-default" id="prop-plugin-agent"></select>
+            </div>
+            <div class="properties-section">
+              <label for="prop-plugin-timeout">Timeout (ms)</label>
+              <input type="number" id="prop-plugin-timeout" min="1000" step="1000" placeholder="300000" title="Plugin execution timeout in milliseconds">
+            </div>
+            <div id="prop-plugin-fields"></div>
+            <div id="prop-plugin-docs-section" style="display: none; margin-top: 12px;">
+              <button id="prop-plugin-docs-btn" type="button" onclick="openPluginDocs()" style="width: 100%; padding: 8px 12px; background: #1565c0; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                <i class="material-icons" style="font-size: 16px; line-height: 1;">description</i>
+                View Plugin Documentation
+              </button>
+            </div>
+          </div>
+
+          <button class="delete-btn" onclick="deleteSelectedNode()">Delete Node</button>
+        </div>
+      </div>
+    </div><!-- /orchestration-main -->
+
+    <div id="orchestration-footer">
+      <div>Nodes: <strong id="node-count">0</strong> · Connections: <strong id="edge-count">0</strong></div>
+      <div style="font-size:12px;color:#888;">Drawflow editor · same API contract as classic SVG builder</div>
+    </div>
+  </div>
+
+  <div id="zoom-controls" class="drawflow-mode">
+    <button type="button" id="zoom-out">−</button>
+    <span id="zoom-level">100%</span>
+    <button type="button" id="zoom-in">+</button>
+    <button type="button" id="zoom-reset">↻</button>
+  </div>
+
+  
+  <!-- Plugin Documentation Modal -->
+  <div id="plugin-docs-modal" class="modal" style="max-height: 90vh; max-width: 860px; width: 92%;">
+    <div class="modal-content" style="padding-bottom: 0;">
+      <h4 id="plugin-docs-modal-title" style="display: flex; align-items: center; gap: 10px; margin-bottom: 4px;">
+        <i class="material-icons" style="color: #1565c0;">description</i>
+        <span></span>
+      </h4>
+    </div>
+    <div style="padding: 0 24px 16px 24px; max-height: calc(90vh - 140px); overflow-y: auto;">
+      <div id="plugin-docs-modal-body" style="line-height: 1.7; font-size: 14px; color: #333;"></div>
+    </div>
+    <div class="modal-footer">
+      <a href="#!" class="modal-close waves-effect waves-blue btn-flat" style="color: #1565c0;">Close</a>
+    </div>
+  </div>
+
+  
+  <!-- Canvas Right-click Context Menu -->
+  <div id="canvas-context-menu">
+    <div class="ctx-menu-item ctx-danger" id="ctx-delete" data-action="delete">
+      <i class="material-icons">delete</i> Delete
+    </div>
+    <div class="ctx-menu-item" id="ctx-clone" data-action="clone">
+      <i class="material-icons">content_copy</i> Clone
+    </div>
+    <div class="ctx-menu-item" id="ctx-copy" data-action="copy">
+      <i class="material-icons">file_copy</i> Copy
+    </div>
+    <div class="ctx-menu-item" id="ctx-paste" data-action="paste">
+      <i class="material-icons">content_paste</i> Paste
+    </div>
+    <div class="ctx-menu-separator"></div>
+    <div class="ctx-menu-item" id="ctx-undo" data-action="undo">
+      <i class="material-icons">undo</i> Undo
+    </div>
+    <div class="ctx-menu-item" id="ctx-redo" data-action="redo">
+      <i class="material-icons">redo</i> Redo
+    </div>
+    <div class="ctx-menu-separator"></div>
+    <div class="ctx-menu-item" data-action="zoom-in">
+      <i class="material-icons">zoom_in</i> Zoom In
+    </div>
+    <div class="ctx-menu-item" data-action="zoom-out">
+      <i class="material-icons">zoom_out</i> Zoom Out
+    </div>
+    <div class="ctx-menu-item" data-action="zoom-reset">
+      <i class="material-icons">youtube_searched_for</i> Reset Zoom
+    </div>
+    <div class="ctx-menu-item" data-action="fit">
+      <i class="material-icons">fit_screen</i> Fit All
+    </div>
+    <div class="ctx-menu-item" data-action="auto-layout">
+      <i class="material-icons">auto_fix_high</i> Auto Layout
+    </div>
+  </div>
+
+  <%- include('./partials/_footer'); %>
+
+
+  <!-- Validation errors modal -->
+  <div id="validation-errors-modal" class="modal" style="max-width: 560px;">
+    <div class="modal-content">
+      <h5 style="margin-top:0;">Orchestration has validation issues</h5>
+      <p style="color:#666;margin-bottom:12px;">Some required fields or connections are missing. You can fix them or save anyway.</p>
+      <div id="validation-errors-list" style="max-height:280px;overflow:auto;background:#fafafa;border:1px solid #eee;border-radius:4px;padding:12px;font-size:13px;"></div>
+    </div>
+    <div class="modal-footer">
+      <a href="#!" class="modal-close waves-effect btn-flat">Cancel</a>
+      <a href="#!" id="validation-save-anyway" class="waves-effect waves-orange btn-flat" style="color:#e65100;font-weight:600;">Save anyway</a>
+    </div>
+  </div>
+
+  <!-- Schedules list modal -->
+  <div id="schedules-list-modal" class="modal" style="max-height:90vh;max-width:800px;width:90%;">
+    <div class="modal-content">
+      <h5 style="margin-top:0;">Schedules using this orchestration</h5>
+      <div id="schedules-list-container"><p style="color:#888;">Loading…</p></div>
+    </div>
+    <div class="modal-footer">
+      <a href="#!" class="modal-close waves-effect btn-flat">Close</a>
+    </div>
+  </div>
+
+  <!-- Discard changes modal -->
+  <div id="discard-changes-modal" class="modal" style="max-width:480px;">
+    <div class="modal-content">
+      <h5 style="margin-top:0;">Discard changes?</h5>
+      <p>You may have unsaved changes. Leaving now will discard them.</p>
+    </div>
+    <div class="modal-footer">
+      <a href="#!" class="modal-close waves-effect btn-flat">Stay</a>
+      <a href="#!" onclick="discardOrchestrationChanges()" class="waves-effect waves-red btn-flat" style="color:#f44336;font-weight:600;">Discard &amp; Exit</a>
+    </div>
+  </div>
+
+  <script src="/js/drawflow/drawflow.min.js?v=df7"></script>
+  <script src="/js/orchestration-drawflow-core.js?v=df21"></script>
+  <script src="/js/orchestration-drawflow-editor.js?v=df32"></script>
+  <script src="/js/orchestration-drawflow-properties.js?v=df29"></script>
+  <script>
+    let orchestrationId = '<%= typeof jobId !== "undefined" ? jobId : "" %>'.trim() || null;
+    let orchestrationName = <%- JSON.stringify(typeof jobName !== 'undefined' ? jobName : '') %>;
+    let orchestrationDescription = <%- JSON.stringify(typeof jobDescription !== 'undefined' ? jobDescription : '') %>;
+    let orchestrationIcon = <%- JSON.stringify(typeof icon !== 'undefined' ? icon : 'workspaces') %>;
+    let orchestrationColor = <%- JSON.stringify(typeof color !== 'undefined' ? color : '#FF9800') %>;
+
+    window.closeDetailsPanel = function () {
+      if (window.OrchProperties) OrchProperties.close();
+    };
+
+    window.selectNodeForProperties = function (node) {
+      if (window.OrchProperties) OrchProperties.open(node);
+    };
+
+    window.availablePlugins = window.availablePlugins || [];
+
+
+    function enterNameEditMode(ev) {
+      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+      var header = document.getElementById('orchestration-header');
+      if (header) header.classList.add('name-edit-mode');
+      var nameInput = document.getElementById('orch-name-input');
+      var descInput = document.getElementById('orch-desc-input');
+      if (nameInput) {
+        nameInput.value = orchestrationName || '';
+        setTimeout(function () { nameInput.focus(); nameInput.select(); }, 0);
+      }
+      if (descInput) descInput.value = orchestrationDescription || '';
+    }
+
+    function saveOrchestrationName(ev) {
+      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+      var nameInput = document.getElementById('orch-name-input');
+      var descInput = document.getElementById('orch-desc-input');
+      var name = nameInput ? nameInput.value.trim() : '';
+      if (!name) {
+        M.toast({ html: 'Name is required' });
+        return;
+      }
+      orchestrationName = name;
+      orchestrationDescription = descInput ? descInput.value.trim() : '';
+      var nt = document.getElementById('orch-name-text');
+      var dt = document.getElementById('orch-desc-text');
+      if (nt) nt.textContent = orchestrationName;
+      if (dt) dt.textContent = orchestrationDescription || 'No Description';
+      cancelNameEdit();
+    }
+
+    function cancelNameEdit(ev) {
+      if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+      var header = document.getElementById('orchestration-header');
+      if (header) header.classList.remove('name-edit-mode');
+    }
+
+    function injectIconSelectPreviews() {
+      var selectElement = document.getElementById('icon_select');
+      if (!selectElement || !window.M || !M.FormSelect) return;
+      var instance = M.FormSelect.getInstance(selectElement);
+      if (!instance || !instance.dropdownOptions) return;
+      var dropdownContent = instance.dropdownOptions;
+      dropdownContent.querySelectorAll('li').forEach(function (li, index) {
+        if (index === 0) return; // disabled placeholder
+        var option = selectElement.querySelectorAll('option')[index];
+        if (!option) return;
+        var icon = option.getAttribute('data-icon') || option.value;
+        // Remove previous inject
+        var existing = li.querySelector('i.material-icons.orch-icon-opt');
+        if (existing) existing.remove();
+        var imgElement = li.querySelector('img');
+        if (imgElement) imgElement.remove();
+        var iconElement = document.createElement('i');
+        iconElement.className = 'material-icons left orch-icon-opt';
+        iconElement.style.position = 'relative';
+        iconElement.style.top = '6px';
+        iconElement.style.marginRight = '8px';
+        iconElement.style.color = orchestrationColor || '#ff9800';
+        iconElement.textContent = icon;
+        li.prepend(iconElement);
+      });
+    }
+
+    function ensureIconFormSelect() {
+      var selectElement = document.getElementById('icon_select');
+      if (!selectElement || !window.M || !M.FormSelect) return null;
+      var instance = M.FormSelect.getInstance(selectElement);
+      if (instance) {
+        try { instance.destroy(); } catch (e) {}
+      }
+      instance = M.FormSelect.init(selectElement, {
+        dropdownOptions: {
+          constrainWidth: false,
+          coverTrigger: false
+        }
+      });
+      // Sync selected value
+      if (orchestrationIcon) {
+        selectElement.value = orchestrationIcon;
+        if (instance && instance.input) {
+          instance.input.value = orchestrationIcon;
+        }
+      }
+      injectIconSelectPreviews();
+      return instance;
+    }
+
+    function toggleIconEdit(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      var iconEdit = document.getElementById('orch-icon-edit');
+      if (!iconEdit) return;
+      var opening = !iconEdit.classList.contains('open');
+      if (opening) {
+        iconEdit.classList.add('open');
+        iconEdit.style.display = 'block';
+        var ii = document.getElementById('orch-icon-input');
+        if (ii) ii.value = orchestrationIcon;
+        ensureIconFormSelect();
+        initOrchSpectrum(orchestrationColor);
+        setOrchColor(orchestrationColor);
+      } else {
+        iconEdit.classList.remove('open');
+        iconEdit.style.display = 'none';
+      }
+    }
+
+    function updateIconPreview(selectItem) {
+      if (!selectItem) return;
+      document.getElementById('orch-icon-element').innerText = selectItem.value;
+      document.getElementById('orch-icon-input').value = selectItem.value;
+    }
+
+    function initOrchSpectrum(inColor) {
+      if (!window.jQuery || !jQuery.fn || !jQuery.fn.spectrum) return;
+      var $picker = jQuery('#picker');
+      if (!$picker.length) return;
+      try {
+        if ($picker.spectrum) {
+          try { $picker.spectrum('destroy'); } catch (e) {}
+        }
+      } catch (e) {}
+      $picker.spectrum({
+        preferredFormat: 'hex',
+        showInput: true,
+        showInitial: true,
+        color: inColor || '#FF9800',
+        change: function (c) {
+          if (!c) return;
+          setOrchColor(c.toHexString());
+        },
+        move: function (c) {
+          if (!c) return;
+          var hex = c.toHexString();
+          var colour = document.getElementById('colour');
+          var hidden = document.getElementById('orch-color-input');
+          if (colour) colour.value = hex;
+          if (hidden) hidden.value = hex;
+          var ie = document.getElementById('orch-icon-element');
+          if (ie) ie.style.color = hex;
+        }
+      });
+    }
+
+    function setOrchColor(val) {
+      if (!val) return;
+      var hex = String(val).trim();
+      if (hex && hex.charAt(0) !== '#') hex = '#' + hex;
+      var colour = document.getElementById('colour');
+      var hidden = document.getElementById('orch-color-input');
+      var picker = document.getElementById('picker');
+      if (colour) colour.value = hex;
+      if (hidden) hidden.value = hex;
+      if (picker) picker.value = hex;
+      if (window.jQuery && jQuery.fn && jQuery.fn.spectrum) {
+        try { jQuery('#picker').spectrum('set', hex); } catch (e) {}
+      }
+      var ie = document.getElementById('orch-icon-element');
+      if (ie) ie.style.color = hex;
+      // Refresh icon colours in dropdown previews
+      document.querySelectorAll('#orch-icon-edit .orch-icon-opt').forEach(function (el) {
+        el.style.color = hex;
+      });
+    }
+
+    function saveIconEdit() {
+      var iconInput = (document.getElementById('orch-icon-input') || {}).value || '';
+      iconInput = String(iconInput).trim();
+      var colorInput = (document.getElementById('orch-color-input') || {}).value || '';
+      colorInput = String(colorInput).trim();
+      if (!iconInput || !/^[a-zA-Z0-9_]+$/.test(iconInput)) {
+        M.toast({ html: 'Please provide a valid icon name' });
+        return;
+      }
+      if (!colorInput || !/^#[0-9A-Fa-f]{6}$/.test(colorInput)) {
+        M.toast({ html: 'Please provide a valid hex colour (e.g. #FF9800)' });
+        return;
+      }
+      orchestrationIcon = iconInput;
+      orchestrationColor = colorInput;
+      var ie = document.getElementById('orch-icon-element');
+      if (ie) {
+        ie.textContent = orchestrationIcon;
+        ie.style.color = orchestrationColor;
+      }
+      cancelIconEdit();
+    }
+
+    function cancelIconEdit() {
+      var iconEdit = document.getElementById('orch-icon-edit');
+      if (iconEdit) {
+        iconEdit.classList.remove('open');
+        iconEdit.style.display = 'none';
+      }
+    }
+
+
+    function updateExportButtonState() {
+      const btn = document.getElementById('export-button');
+      if (!btn) return;
+      const canExport = Boolean(orchestrationId);
+      btn.disabled = !canExport;
+      btn.title = canExport
+        ? 'Export this orchestration'
+        : 'Save this orchestration before exporting';
+    }
+
+    function performSave() {
+      const name = (orchestrationName || '').trim();
+      if (!name) {
+        M.toast({ html: 'Please set an orchestration name (click the title)' });
+        enterNameEditMode();
+        return;
+      }
+      const payload = OrchEditor.getOrchestrationPayload({
+        jobId: orchestrationId,
+        name: name,
+        description: (orchestrationDescription || '').trim(),
+        icon: orchestrationIcon || 'workspaces',
+        color: orchestrationColor || '#FF9800'
+      });
+      const url = orchestrationId ? '/rest/orchestration/jobs/' + encodeURIComponent(orchestrationId) : '/rest/orchestration/jobs';
+      const method = orchestrationId ? 'PUT' : 'POST';
+      $.ajax({
+        url: url, type: method, contentType: 'application/json', data: JSON.stringify(payload),
+        success: function (result) {
+          orchestrationId = result.job.id;
+          M.toast({ html: 'Orchestration saved!' });
+          updateExportButtonState();
+          const editorUrl = '/orchestrationBuilder.html?id=' + encodeURIComponent(orchestrationId);
+          if (window.location.pathname + window.location.search !== editorUrl) {
+            window.history.replaceState({}, '', editorUrl);
+          }
+        },
+        error: function (err) {
+          M.toast({ html: 'Error saving: ' + ((err.responseJSON && err.responseJSON.error) || err.statusText) });
+        }
+      });
+    }
+
+    function saveOrchestration() {
+      const name = (orchestrationName || '').trim();
+      if (!name) {
+        M.toast({ html: 'Please set an orchestration name (click the title)' });
+        enterNameEditMode();
+        return;
+      }
+
+      const errors = OrchEditor.validate();
+      if (errors.length) {
+        const list = document.getElementById('validation-errors-list');
+        if (list) {
+          list.innerHTML = errors.map(function (e) {
+            return '<div style="margin-bottom:6px;">• ' + String(e).replace(/</g, '&lt;') + '</div>';
+          }).join('');
+        }
+        const modalEl = document.getElementById('validation-errors-modal');
+        if (modalEl && window.M) {
+          let inst = M.Modal.getInstance(modalEl);
+          if (!inst) inst = M.Modal.init(modalEl);
+          inst.open();
+          const anyway = document.getElementById('validation-save-anyway');
+          if (anyway) {
+            anyway.onclick = function (ev) {
+              ev.preventDefault();
+              inst.close();
+              performSave();
+            };
+          }
+        } else {
+          // Fallback if Materialize modal unavailable
+          if (window.confirm('Validation issues:\n\n• ' + errors.join('\n• ') + '\n\nSave anyway?')) {
+            performSave();
+          }
+        }
+        return;
+      }
+      performSave();
+    }
+
+    function exportCurrentOrchestration() {
+      if (!orchestrationId) {
+        M.toast({ html: 'Save this orchestration before exporting' });
+        return;
+      }
+      window.location.href = '/rest/orchestration/jobs/' + encodeURIComponent(orchestrationId) + '/export';
+    }
+
+    function cancelOrchestrationChanges() {
+      const modalEl = document.getElementById('discard-changes-modal');
+      if (modalEl && window.M) {
+        let inst = M.Modal.getInstance(modalEl);
+        if (!inst) inst = M.Modal.init(modalEl);
+        inst.open();
+      } else if (window.confirm('Leave and discard unsaved changes?')) {
+        discardOrchestrationChanges();
+      }
+    }
+
+    function discardOrchestrationChanges() {
+      window.location.href = '/orchestrationList.html';
+    }
+
+    function listSchedulesForOrchestration() {
+      if (!orchestrationId) {
+        M.toast({ html: 'Save the orchestration first to list related schedules' });
+        return;
+      }
+      const container = document.getElementById('schedules-list-container');
+      if (container) container.innerHTML = '<p style="color:#888;">Loading…</p>';
+      $.ajax({
+        url: '/api/schedules/by-orchestration/' + encodeURIComponent(orchestrationId),
+        type: 'GET',
+        dataType: 'json',
+        success: function (data) {
+          displaySchedulesList(data.schedules || []);
+          const modalEl = document.getElementById('schedules-list-modal');
+          if (modalEl && window.M) {
+            let inst = M.Modal.getInstance(modalEl);
+            if (!inst) inst = M.Modal.init(modalEl);
+            inst.open();
+          }
+        },
+        error: function () {
+          M.toast({ html: 'Failed to fetch schedules' });
+        }
+      });
+    }
+
+    function displaySchedulesList(schedules) {
+      const container = document.getElementById('schedules-list-container');
+      if (!container) return;
+      if (!schedules.length) {
+        container.innerHTML = '<p style="color:#888;">No schedules currently use this orchestration.</p>';
+        return;
+      }
+      container.innerHTML = schedules.map(function (s) {
+        const name = s.name || s.id || 'Schedule';
+        const id = s.id || '';
+        return '<div style="padding:10px 12px;border:1px solid #e0e0e0;border-radius:4px;margin-bottom:8px;background:#fff;">' +
+          '<strong>' + String(name).replace(/</g, '&lt;') + '</strong>' +
+          (id ? '<div style="font-size:12px;color:#888;margin-top:4px;">' + String(id).replace(/</g, '&lt;') + '</div>' : '') +
+          '</div>';
+      }).join('');
+    }
+
+    function runOrchestration() {
+      if (!orchestrationId) { M.toast({ html: 'Save the orchestration before running' }); return; }
+      $.ajax({
+        url: '/rest/orchestration/jobs/' + encodeURIComponent(orchestrationId) + '/execute',
+        type: 'POST',
+        success: function (result) {
+          window.open('/orchestration/monitor.html?jobId=' + encodeURIComponent(orchestrationId) +
+            '&executionId=' + encodeURIComponent(result.executionId), '_blank');
+        },
+        error: function (err) { M.toast({ html: 'Run failed: ' + err.statusText }); }
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      var paletteFilter = document.getElementById('palette-filter');
+      if (paletteFilter) {
+        paletteFilter.addEventListener('input', function () {
+          const q = this.value.toLowerCase();
+          document.querySelectorAll('.palette-item').forEach(function (item) {
+            item.style.display = !q || item.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+          });
+        });
+      }
+
+      if (!window.OrchEditor) {
+        console.error('OrchEditor failed to load — check orchestration-drawflow-editor.js');
+        return;
+      }
+      OrchEditor.init({ containerId: 'drawflow', orchestrationId: orchestrationId });
+      if (window.OrchProperties) OrchProperties.boot();
+      if (window.M) {
+        ['plugin-docs-modal', 'validation-errors-modal', 'schedules-list-modal', 'discard-changes-modal'].forEach(function (id) {
+          const el = document.getElementById(id);
+          if (el) M.Modal.init(el);
+        });
+      }
+      updateExportButtonState();
+      // Pre-init icon FormSelect so dropdown structure exists (previews injected on open)
+      if (document.getElementById('icon_select') && window.M && M.FormSelect) {
+        try { ensureIconFormSelect(); } catch (e) { console.warn('icon FormSelect', e); }
+      }
+      if (window.jQuery && jQuery.fn && jQuery.fn.spectrum) {
+        try { initOrchSpectrum(orchestrationColor); } catch (e) {}
+      }
+      var nameInputEl = document.getElementById('orch-name-input');
+      if (nameInputEl) {
+        nameInputEl.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); saveOrchestrationName(); }
+          if (e.key === 'Escape') { e.preventDefault(); cancelNameEdit(); }
+        });
+      }
+      document.addEventListener('click', function (e) {
+        var edit = document.getElementById('orch-icon-edit');
+        if (!edit || !edit.classList.contains('open')) return;
+        var disp = document.getElementById('orch-icon-display');
+        if (disp && disp.contains(e.target)) return;
+        if (edit.contains(e.target)) return;
+        cancelIconEdit();
+      });
+      if (orchestrationId) {
+        $.ajax({
+          url: '/rest/orchestration/jobs/' + encodeURIComponent(orchestrationId),
+          type: 'GET',
+          success: function (orch) {
+            if (orch.name) {
+              orchestrationName = orch.name;
+              var nt = document.getElementById('orch-name-text');
+              if (nt) nt.textContent = orch.name;
+            }
+            if (orch.description) {
+              orchestrationDescription = orch.description;
+              var dt = document.getElementById('orch-desc-text');
+              if (dt) dt.textContent = orch.description || 'No Description';
+            }
+            if (orch.icon) {
+              orchestrationIcon = orch.icon;
+              var ie = document.getElementById('orch-icon-element');
+              if (ie) ie.textContent = orch.icon;
+              var ii = document.getElementById('orch-icon-input');
+              if (ii) ii.value = orch.icon;
+            }
+            if (orch.color) {
+              orchestrationColor = orch.color;
+              var ie2 = document.getElementById('orch-icon-element');
+              if (ie2) ie2.style.color = orch.color;
+              setOrchColor(orch.color);
+            }
+            OrchEditor.loadOrchestration(orch);
+            updateExportButtonState();
+          },
+          error: function () { M.toast({ html: 'Failed to load orchestration' }); }
+        });
+      }
+      $.ajax({
+        url: '/rest/orchestration/plugins', type: 'GET',
+        success: function (plugins) {
+          window.availablePlugins = plugins || [];
+          if (!plugins || !plugins.length) return;
+          document.getElementById('plugin-palette-section').style.display = '';
+          const host = document.getElementById('plugin-palette-items');
+          plugins.forEach(function (p) {
+            const name = p.name || p.id;
+            const div = document.createElement('div');
+            div.className = 'palette-item';
+            div.draggable = true;
+            div.dataset.nodeType = 'plugin';
+            div.dataset.pluginName = name;
+            div.innerHTML = '<i class="material-icons">extension</i><span>' + name + '</span>';
+            host.appendChild(div);
+            div.addEventListener('dragstart', function (e) {
+              e.dataTransfer.setData('nodeType', 'plugin');
+              e.dataTransfer.setData('pluginName', name);
+            });
+          });
+        }
+      });
+    });
+  </script>
+</body>
+</html>

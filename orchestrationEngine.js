@@ -360,6 +360,11 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
         throw new Error('Execution exceeded maximum iterations (infinite loop detected)');
       }
 
+      // Fail-fast: another parallel branch already failed — stop this branch immediately
+      if (pathContext.parallelAbort && pathContext.parallelAbort.failed) {
+        return 'failure';
+      }
+
       const currentNode = nodeMap[nodeId];
       if (!currentNode) {
         throw new Error(`Node [${nodeId}] not found in orchestration`);
@@ -372,7 +377,9 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
           if (!joinState[currentNode.id]) {
             joinState[currentNode.id] = {
               arrivedEdgeIds: new Set(),
-              released: false
+              released: false,
+              failedBranches: 0,
+              failedFromNodes: []
             };
           }
 
@@ -380,15 +387,23 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
           if (incomingEdge && incomingEdge.id) {
             state.arrivedEdgeIds.add(incomingEdge.id);
           }
+          // Propagate upstream step failures into the join barrier
+          if (pathContext && pathContext.branchFailed) {
+            state.failedBranches += 1;
+            if (pathContext.failedNodeId) {
+              state.failedFromNodes.push(pathContext.failedNodeId);
+            }
+          }
 
           const joinStrategy = (currentNode.data?.joinStrategy || 'waitAll').toLowerCase();
           let continueFromJoin = false;
 
           if (!state.released) {
-            if (joinStrategy === 'waitany') {
+            if (joinStrategy === 'waitany' || joinStrategy === 'wait-any') {
               state.released = true;
               continueFromJoin = true;
             } else {
+              // waitAll / wait-for-all (default)
               const requiredCount = Math.max(incomingEdges.length, 1);
               if (state.arrivedEdgeIds.size >= requiredCount) {
                 state.released = true;
@@ -398,8 +413,31 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
           }
 
           // This branch reached the join but is not the releasing branch.
+          // Return 'failure' if this branch already failed so Promise.all at the
+          // split sees the failure (null was previously filtered as success).
           if (!continueFromJoin) {
-            return null;
+            return (pathContext && pathContext.branchFailed) ? 'failure' : null;
+          }
+
+          // Releasing branch: waitAll must not continue the happy path if any
+          // parallel branch failed upstream.
+          const isWaitAll = joinStrategy !== 'waitany' && joinStrategy !== 'wait-any';
+          if (isWaitAll && state.failedBranches > 0) {
+            const nodeStartTimeJoin = markNodeStarted(currentNode);
+            markNodeCompleted(currentNode, nodeStartTimeJoin, 'failed', {
+              exitCode: 1,
+              reason: 'join_wait_all_upstream_failure',
+              failedFromNodes: state.failedFromNodes
+            });
+            executionLog.errors.push({
+              node: currentNode.id,
+              message: `Join [${currentNode.id}] wait-for-all: ${state.failedBranches} branch(es) failed` +
+                (state.failedFromNodes.length ? ` (from: ${state.failedFromNodes.join(', ')})` : '')
+            });
+            logger.error(
+              `Join node [${currentNode.id}] wait-for-all blocked: ${state.failedBranches} failed branch(es)`
+            );
+            return 'failure';
           }
         }
       }
@@ -609,7 +647,25 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
             throw new Error(`Execute node [${currentNode.id}] has multiple outgoing connections. Use split-join node in split mode.`);
           }
 
-          return executePath(outgoing[0].to, { ...pathContext, lastScriptNodeId: currentNode.id }, outgoing[0]);
+          const nextCtxHttp = {
+            ...pathContext,
+            lastScriptNodeId: currentNode.id
+          };
+          if (exitCode !== 0) {
+            nextCtxHttp.branchFailed = true;
+            nextCtxHttp.failedNodeId = currentNode.id;
+            if (pathContext.parallelAbort) {
+              pathContext.parallelAbort.failed = true;
+              pathContext.parallelAbort.failedNodeId = currentNode.id;
+            }
+            const ep = String(pathContext.errorPolicy || '').toLowerCase().replace(/\s+/g, '');
+            if (ep === 'failfast' || ep === 'fail-fast' || ep === 'fail_fast') {
+              throw new Error(
+                `Fail-fast: HTTP execute node [${currentNode.id}] failed with exit code ${exitCode}`
+              );
+            }
+          }
+          return executePath(outgoing[0].to, nextCtxHttp, outgoing[0]);
         }
 
         let scriptPath = currentNode.data.script;
@@ -803,7 +859,25 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
             throw new Error(`Execute node [${currentNode.id}] has multiple outgoing connections. Use split-join node in split mode.`);
           }
 
-          return executePath(outgoing[0].to, { ...pathContext, lastScriptNodeId: currentNode.id }, outgoing[0]);
+          const nextCtxExec = {
+            ...pathContext,
+            lastScriptNodeId: currentNode.id
+          };
+          if ((result.exitCode || 0) !== 0) {
+            nextCtxExec.branchFailed = true;
+            nextCtxExec.failedNodeId = currentNode.id;
+            if (pathContext.parallelAbort) {
+              pathContext.parallelAbort.failed = true;
+              pathContext.parallelAbort.failedNodeId = currentNode.id;
+            }
+            const ep = String(pathContext.errorPolicy || '').toLowerCase().replace(/\s+/g, '');
+            if (ep === 'failfast' || ep === 'fail-fast' || ep === 'fail_fast') {
+              throw new Error(
+                `Fail-fast: execute node [${currentNode.id}] failed with exit code ${result.exitCode || 0}`
+              );
+            }
+          }
+          return executePath(outgoing[0].to, nextCtxExec, outgoing[0]);
         } catch (err) {
           wsBrowser.emitOrchestrationEvent(jobId, executionLog.executionId, 'orchestrationNodeCompleted', {
             nodeId: currentNode.id,
@@ -1105,9 +1179,61 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
 
           markNodeCompleted(currentNode, nodeStartTime, 'success');
 
-          const branchPromises = outgoing.map(edge => executePath(edge.to, { ...pathContext }, edge));
-          const branchResults = await Promise.all(branchPromises);
-          return mergeBranchResults(branchResults, currentNode.data?.errorPolicy || 'waitForAll');
+          // Prefer errorPolicy on this split node; fall back to any join node in the graph
+          // (the properties panel historically stored fail-fast on the join node).
+          let errorPolicy = currentNode.data?.errorPolicy || null;
+          if (!errorPolicy) {
+            for (const n of Object.values(nodeMap)) {
+              if (n.type === 'split-join' &&
+                  String(n.data?.mode || '').toLowerCase() === 'join' &&
+                  n.data?.errorPolicy) {
+                errorPolicy = n.data.errorPolicy;
+                break;
+              }
+            }
+          }
+          errorPolicy = errorPolicy || 'waitForAll';
+          const isFailFast = ['failfast', 'fail-fast', 'fail_fast'].includes(
+            String(errorPolicy).toLowerCase().replace(/\s+/g, '')
+          );
+
+          const parallelAbort = { failed: false, failedNodeId: null };
+          const branchPromises = outgoing.map(edge =>
+            executePath(edge.to, {
+              ...pathContext,
+              parallelAbort,
+              errorPolicy: isFailFast ? 'failFast' : errorPolicy
+            }, edge)
+          );
+
+          let branchResults;
+          if (isFailFast) {
+            // Reject as soon as any branch returns failure / throws so we don't
+            // wait for the rest (siblings exit early via parallelAbort).
+            try {
+              branchResults = await Promise.all(
+                branchPromises.map(async (p) => {
+                  const r = await p;
+                  if (r === 'failure' || r === 'error') {
+                    parallelAbort.failed = true;
+                    throw new Error('Parallel branch failed (fail-fast)');
+                  }
+                  return r;
+                })
+              );
+            } catch (e) {
+              parallelAbort.failed = true;
+              logger.error(
+                `Split [${currentNode.id}] fail-fast: aborting remaining branches` +
+                (parallelAbort.failedNodeId ? ` (failed at ${parallelAbort.failedNodeId})` : '')
+              );
+              return 'failure';
+            }
+          } else {
+            branchResults = await Promise.all(branchPromises);
+          }
+
+          return mergeBranchResults(branchResults, isFailFast ? 'failFast' : errorPolicy);
         }
 
         if (mode === 'join') {
@@ -1251,7 +1377,25 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
           const outgoing = getOutgoingEdges(currentNode.id, 'out');
           if (outgoing.length === 0) return pluginOutput.exitCode === 0 ? 'success' : 'failure';
           if (outgoing.length > 1) throw new Error(`Plugin node [${currentNode.id}] has multiple outgoing connections. Use split-join node in split mode.`);
-          return executePath(outgoing[0].to, { ...pathContext, lastScriptNodeId: currentNode.id }, outgoing[0]);
+          const nextCtx = {
+            ...pathContext,
+            lastScriptNodeId: currentNode.id
+          };
+          if (pluginOutput.exitCode !== 0) {
+            nextCtx.branchFailed = true;
+            nextCtx.failedNodeId = currentNode.id;
+            if (pathContext.parallelAbort) {
+              pathContext.parallelAbort.failed = true;
+              pathContext.parallelAbort.failedNodeId = currentNode.id;
+            }
+            const ep = String(pathContext.errorPolicy || '').toLowerCase().replace(/\s+/g, '');
+            if (ep === 'failfast' || ep === 'fail-fast' || ep === 'fail_fast') {
+              throw new Error(
+                `Fail-fast: plugin node [${currentNode.id}] failed with exit code ${pluginOutput.exitCode}`
+              );
+            }
+          }
+          return executePath(outgoing[0].to, nextCtx, outgoing[0]);
 
         } catch (err) {
           wsBrowser.emitOrchestrationEvent(jobId, executionLog.executionId, 'orchestrationNodeCompleted', {
@@ -1308,7 +1452,12 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
     }
 
     executionLog.endTime = new Date().toISOString();
-    executionLog.status = 'completed';
+    // status is what the monitor/history UI primarily shows; finalStatus is the outcome
+    if (executionLog.finalStatus === 'failure' || executionLog.finalStatus === 'error') {
+      executionLog.status = 'failed';
+    } else {
+      executionLog.status = 'completed';
+    }
     if (onNodeComplete) {
       onNodeComplete(executionLog);
     }

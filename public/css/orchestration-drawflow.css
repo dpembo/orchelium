@@ -1,0 +1,579 @@
+/* Orchelium Drawflow theme – works with light & dark */
+
+#drawflow,
+#drawflow-viewer {
+  width: 100%;
+  height: 100%;
+  min-height: 0; /* allow flex child to shrink/fill */
+  position: relative;
+  background: #fafafa;
+}
+
+body.dark #drawflow,
+body.dark #drawflow-viewer,
+html.dark #drawflow,
+html.dark #drawflow-viewer {
+  background: #1a1d24;
+}
+
+/*
+ * Drawflow layout notes:
+ *  - Each node is wrapped in a .parent-node (position: relative, NO size).
+ *  - The node itself is position: absolute with left/top.
+ *  - Never set width/height on .parent-node — that stacks full-viewport wrappers
+ *    and clips every node after the first under overflow:hidden.
+ */
+/*
+ * Container (#drawflow / #drawflow-viewer) gets class parent-drawflow from the library.
+ * Precanvas is the child div.drawflow — it must NOT be locked to 100%x100% with
+ * overflow:hidden, or nodes at large left/top are clipped and never visible.
+ */
+#drawflow.parent-drawflow,
+#drawflow-viewer.parent-drawflow,
+.parent-drawflow {
+  display: block;
+  overflow: hidden;
+  touch-action: none;
+  outline: none;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+  user-select: none;
+}
+
+/* Precanvas: grow with nodes, origin top-left for pan/zoom math */
+.parent-drawflow > .drawflow {
+  position: relative !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 100%;
+  min-height: 100%;
+  overflow: visible !important;
+  transform-origin: 0 0 !important;
+}
+
+.drawflow .parent-node {
+  position: relative;
+  width: auto;
+  height: auto;
+}
+
+.parent-drawflow > .drawflow svg,
+.drawflow svg {
+  overflow: visible !important;
+}
+
+.drawflow .connection {
+  overflow: visible !important;
+}
+
+/* Nodes — horizontal: inputs (left) | content | outputs (right) */
+.drawflow .drawflow-node {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  position: absolute;
+  background: #fff;
+  border: 2px solid #c5cdd8;
+  border-radius: 8px;
+  min-width: 160px;
+  min-height: 48px;
+  z-index: 2;
+  color: #333;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  padding: 0;
+  cursor: move;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  box-sizing: border-box;
+}
+
+/* Hover: subtle grey, not a loud orange fill */
+.drawflow .drawflow-node:hover {
+  background: #f0f2f5;
+  border-color: #aeb6c2;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* Selected: keep normal fill, orange edge only (override Drawflow's background: red) */
+.drawflow .drawflow-node.selected {
+  background: #fff;
+  border-color: #ff9800;
+  box-shadow: 0 0 0 3px rgba(255, 152, 0, 0.25);
+}
+
+/* Selected + hover still keeps white fill with orange edge */
+.drawflow .drawflow-node.selected:hover {
+  background: #fff;
+  border-color: #ff9800;
+  box-shadow: 0 0 0 3px rgba(255, 152, 0, 0.3);
+}
+
+body.dark .drawflow .drawflow-node {
+  background: #252b36;
+  border-color: #3e4658;
+  color: #e0e6f0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+body.dark .drawflow .drawflow-node:hover {
+  background: #2e3544;
+  border-color: #5a6578;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+body.dark .drawflow .drawflow-node.selected,
+body.dark .drawflow .drawflow-node.selected:hover {
+  background: #252b36;
+  border-color: #ff9800;
+  box-shadow: 0 0 0 3px rgba(255, 152, 0, 0.3);
+}
+
+/* Content sits between input/output columns */
+.drawflow .drawflow-node .drawflow_content_node {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.orch-df-node {
+  padding: 10px 14px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.orch-df-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.orch-df-title .material-icons {
+  font-size: 18px;
+  color: #ff9800;
+}
+
+.orch-df-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.orch-df-sub {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+body.dark .orch-df-sub {
+  color: #9aa3b5;
+}
+
+.orch-df-start .orch-df-title .material-icons { color: #4caf50; }
+.orch-df-end-success .orch-df-title .material-icons { color: #4caf50; }
+.orch-df-end-failure .orch-df-title .material-icons { color: #f44336; }
+.orch-df-condition .orch-df-title .material-icons { color: #7b1fa2; }
+.orch-df-split-join .orch-df-title .material-icons { color: #009688; }
+.orch-df-wait .orch-df-title .material-icons { color: #1976d2; }
+.orch-df-notify .orch-df-title .material-icons { color: #f9a825; }
+.orch-df-plugin .orch-df-title .material-icons { color: #5c6bc0; }
+
+.drawflow-node.start,
+.drawflow-node.end-success,
+.drawflow-node.end-failure {
+  border-radius: 24px;
+  min-width: 100px;
+}
+
+.drawflow-node.condition {
+  border-radius: 4px;
+  border-color: #9c27b0;
+}
+
+.drawflow-node.split-join {
+  border-color: #009688;
+}
+
+/*
+ * Port columns: do NOT set width:0 — that detaches the connector circles.
+ * Match Drawflow defaults: thin side columns, ports centered on the edge.
+ */
+/*
+ * Port columns on left (inputs) and right (outputs).
+ * Thin side strips; circles sit on the vertical mid-edge.
+ */
+.drawflow .drawflow-node .inputs,
+.drawflow .drawflow-node .outputs {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  position: relative;
+  z-index: 4;
+}
+
+.drawflow .drawflow-node .inputs {
+  order: 0;
+  margin-left: -7px;
+}
+
+.drawflow .drawflow-node .drawflow_content_node {
+  order: 1;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.drawflow .drawflow-node .outputs {
+  order: 2;
+  margin-right: -7px;
+}
+
+.drawflow .drawflow-node .input,
+.drawflow .drawflow-node .output {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border: 2px solid #78909c;
+  border-radius: 50%;
+  cursor: crosshair;
+  z-index: 5;
+  margin: 6px 0;
+  left: 0;
+  right: 0;
+  top: auto;
+  bottom: auto;
+  transform: none;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  pointer-events: all;
+}
+
+.drawflow .drawflow-node .input:hover,
+.drawflow .drawflow-node .output:hover {
+  background: #ff9800;
+  border-color: #ff9800;
+}
+
+body.dark .drawflow .drawflow-node .input,
+body.dark .drawflow .drawflow-node .output {
+  background: #1a1d24;
+  border-color: #90a4ae;
+}
+
+/* Connection paths */
+.drawflow .connection .main-path {
+  fill: none;
+  stroke: #90a4ae;
+  stroke-width: 2px;
+}
+
+.drawflow .connection .main-path:hover {
+  stroke: #ff9800;
+  stroke-width: 3px;
+}
+
+.drawflow .connection .main-path.selected {
+  stroke: #ff9800;
+}
+
+body.dark .drawflow .connection .main-path {
+  stroke: #607d8b;
+}
+
+.drawflow .point {
+  cursor: move;
+  stroke: #ff9800;
+  stroke-width: 2;
+  fill: #fff;
+}
+
+/* Status overlays (viewer) — match classic SVG monitor styling */
+
+/*
+ * Classic monitor uses SVG:
+ *   stroke: #ff9800; stroke-width: 3; stroke-dasharray: 20, 8;
+ *   animation: nodeSpinning (dash offset) + nodeBlinking (opacity)
+ * Drawflow nodes are HTML, so we replicate with a dashed border +
+ * a ::after ring that runs the same two animations.
+ */
+.drawflow-node.node-in-progress {
+  /* Solid fill; the marching ring is drawn by ::before only */
+  border: 3px solid transparent !important;
+  box-shadow: 0 0 10px rgba(255, 152, 0, 0.28);
+  opacity: 1 !important;
+  animation: none !important;
+  z-index: 6;
+}
+
+.drawflow-node.node-in-progress::after {
+  display: none;
+}
+
+.drawflow-node.node-completed {
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #4caf50 !important;
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.3);
+  opacity: 1 !important;
+  animation: none !important;
+}
+.drawflow-node.node-completed::after {
+  display: none;
+}
+
+.drawflow-node.node-failed {
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #f44336 !important;
+  box-shadow: 0 0 0 2px rgba(244, 67, 54, 0.3);
+  opacity: 1 !important;
+  animation: none !important;
+}
+.drawflow-node.node-failed::after {
+  display: none;
+}
+
+.drawflow-node.node-pending {
+  border-style: solid !important;
+  border-width: 2px !important;
+  border-color: #c5cdd8 !important;
+  box-shadow: none;
+  opacity: 0.65;
+  animation: none !important;
+}
+.drawflow-node.node-pending::after {
+  display: none;
+}
+body.dark .drawflow-node.node-pending {
+  border-color: #3e4658 !important;
+  opacity: 0.55;
+}
+
+/* Classic: stroke-dashoffset 0 → 28 over 2s (dash 20 + gap 8) */
+@keyframes nodeSpinningBorder {
+  0%   { border-color: #ff9800; opacity: 1; }
+  25%  { border-color: #ffb74d; }
+  50%  { border-color: #ff9800; opacity: 0.85; }
+  75%  { border-color: #ffa726; }
+  100% { border-color: #ff9800; opacity: 1; }
+}
+
+/* Classic nodeBlinking */
+@keyframes nodeBlinking {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/*
+ * Marching ants — continuous, GPU-friendly.
+ * Uses a conic-style dash ring via border + stroke-dasharray on an SVG overlay
+ * injected once; pure CSS fallback uses smooth background-position.
+ */
+.drawflow-node.node-in-progress {
+  border: 3px solid transparent !important;
+  background-clip: padding-box;
+  box-shadow: 0 0 10px rgba(255, 152, 0, 0.28);
+  opacity: 1 !important;
+  animation: none !important;
+  z-index: 6;
+  /* Isolate so parent transform/repaint doesn't reset the ring */
+  contain: layout style;
+}
+
+.drawflow-node.node-in-progress > .orch-ants-ring {
+  position: absolute;
+  inset: -3px;
+  width: calc(100% + 6px);
+  height: calc(100% + 6px);
+  pointer-events: none;
+  z-index: 20;
+  overflow: visible;
+}
+
+.drawflow-node.node-in-progress > .orch-ants-ring rect {
+  fill: none;
+  stroke: #ff9800;
+  stroke-width: 3;
+  stroke-dasharray: 14 8;
+  stroke-linecap: butt;
+  animation: orchAntsDash 0.9s linear infinite;
+}
+
+.drawflow-node.start.node-in-progress > .orch-ants-ring rect,
+.drawflow-node.end-success.node-in-progress > .orch-ants-ring rect,
+.drawflow-node.end-failure.node-in-progress > .orch-ants-ring rect {
+  /* rounded nodes: use rx/ry via JS; stroke still marches */
+}
+
+@keyframes orchAntsDash {
+  to {
+    stroke-dashoffset: -22;
+  }
+}
+
+/* Hide pure-CSS ::before ants if SVG ring is present */
+.drawflow-node.node-in-progress.has-ants-ring::before {
+  display: none !important;
+}
+
+/* CSS-only fallback when no SVG ring yet */
+.drawflow-node.node-in-progress:not(.has-ants-ring)::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  border: 3px dashed #ff9800;
+  pointer-events: none;
+  z-index: 8;
+  box-sizing: border-box;
+  /* no opacity animation — static dashed until SVG attaches */
+  animation: none;
+}
+
+.drawflow-node.node-completed::before,
+.drawflow-node.node-failed::before,
+.drawflow-node.node-pending::before {
+  display: none !important;
+}
+
+
+#zoom-controls.drawflow-mode {
+  z-index: 20;
+}
+
+.drawflow-delete {
+  position: absolute;
+  display: block;
+  width: 22px;
+  height: 22px;
+  background: #f44336;
+  color: #fff;
+  z-index: 4;
+  border: none;
+  border-radius: 50%;
+  font-weight: bold;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+  top: -10px;
+  right: -10px;
+  cursor: pointer;
+}
+
+.drawflow-delete:hover {
+  background: #c62828;
+}
+
+
+/* ── Split / Join multiplicity cues ─────────────────────────────── */
+.drawflow .drawflow-node.orch-multi-out .output,
+.drawflow .drawflow-node.orch-sj-split .output {
+  width: 18px;
+  height: 18px;
+  border-width: 3px;
+  border-style: dashed;
+  border-color: #009688;
+  background: #e0f2f1;
+}
+.drawflow .drawflow-node.orch-multi-out .output:hover,
+.drawflow .drawflow-node.orch-sj-split .output:hover {
+  background: #009688;
+  border-color: #009688;
+}
+
+.drawflow .drawflow-node.orch-multi-in .input,
+.drawflow .drawflow-node.orch-sj-join .input {
+  width: 18px;
+  height: 18px;
+  border-width: 3px;
+  border-style: dashed;
+  border-color: #009688;
+  background: #e0f2f1;
+}
+.drawflow .drawflow-node.orch-multi-in .input:hover,
+.drawflow .drawflow-node.orch-sj-join .input:hover {
+  background: #009688;
+  border-color: #009688;
+}
+
+.drawflow .drawflow-node.condition .output_1 {
+  border-color: #4caf50;
+}
+.drawflow .drawflow-node.condition .output_2 {
+  border-color: #f44336;
+}
+
+body.dark .drawflow .drawflow-node.orch-multi-out .output,
+body.dark .drawflow .drawflow-node.orch-sj-split .output,
+body.dark .drawflow .drawflow-node.orch-multi-in .input,
+body.dark .drawflow .drawflow-node.orch-sj-join .input {
+  background: #1a1d24;
+  border-color: #26a69a;
+}
+
+
+/* Drawflow precanvas — origin must be top-left for pan/zoom math */
+#drawflow .drawflow,
+#drawflow-viewer .drawflow {
+  transform-origin: 0 0 !important;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════
+   Viewport fix — override drawflow.min.css (width/height 100%)
+   Precanvas must be larger than the node bounding box or absolute
+   nodes are clipped by the parent .parent-drawflow overflow:hidden.
+   ═══════════════════════════════════════════════════════════════ */
+#drawflow.parent-drawflow,
+#drawflow-viewer.parent-drawflow {
+  display: block !important;
+  overflow: hidden !important;
+  position: relative !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+#drawflow > .drawflow,
+#drawflow-viewer > .drawflow {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 4000px !important;
+  height: 3000px !important;
+  min-width: 4000px !important;
+  min-height: 3000px !important;
+  overflow: visible !important;
+  transform-origin: 0 0 !important;
+  perspective: none !important;
+}
+
+#drawflow .drawflow-node,
+#drawflow-viewer .drawflow-node {
+  position: absolute !important;
+  display: flex !important;
+  visibility: visible !important;
+  z-index: 5 !important;
+}
+
+#drawflow-viewer .drawflow-node.node-pending {
+  opacity: 0.7 !important;
+  border-color: #c5cdd8 !important;
+}

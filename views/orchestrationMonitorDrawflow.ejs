@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0"/>
+  <title>Orchestration Monitor</title>
+  <%- include('./partials/_head'); %>
+  <link rel="stylesheet" href="/css/drawflow.min.css">
+  <link rel="stylesheet" href="/css/orchestration-drawflow.css?v=df34">
+  <style>
+    .orchestration-container {
+      display: grid;
+      grid-template-columns: 1fr;
+      height: calc(100vh - 220px);
+      overflow: hidden;
+      position: relative;
+    }
+    .diagram-section {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      position: relative;
+      background: transparent;
+    }
+    #drawflow-viewer {
+      flex: 1;
+      min-height: 400px;
+      border: 1px solid var(--border-color, #ddd);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .details-section {
+      background: var(--surface-color, #fff);
+      width: 50%;
+      position: absolute;
+      right: 0; top: 0; bottom: 0;
+      transform: translateX(100%);
+      opacity: 0;
+      transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+      pointer-events: none;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid #ddd;
+      overflow-y: auto;
+      padding: 16px;
+    }
+    .details-section.visible {
+      transform: translateX(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .details-close-btn {
+      position: absolute; top: 12px; right: 12px;
+      background: transparent; border: none; cursor: pointer; font-size: 22px;
+    }
+    #zoom-controls {
+      position: absolute; bottom: 20px; right: 20px;
+      background: #fff; border: 1px solid #ddd; border-radius: 4px;
+      display: flex; gap: 5px; padding: 8px; z-index: 100;
+    }
+    body.dark #zoom-controls { background: #252b36; border-color: #3e4658; }
+    #zoom-controls button {
+      width: 32px; height: 32px; border: 1px solid #ddd; background: #fff;
+      border-radius: 3px; cursor: pointer; font-weight: bold;
+    }
+    body.dark #zoom-controls button { background: #1f2430; border-color: #3e4658; color: #e0e6f0; }
+    #zoom-level { min-width: 50px; text-align: center; line-height: 32px; font-size: 12px; color: #666; }
+    .status-badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 500; }
+    .status-executed { background: #c8e6c9; color: #1b5e20; }
+    .status-failed { background: #ffcdd2; color: #b71c1c; }
+    .status-in-progress { background: #ffe0b2; color: #e65100; }
+    .status-not-executed { background: #e0e0e0; color: #424242; }
+    .detail-item { display: grid; grid-template-columns: 90px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-color, #eee); }
+    .detail-label { font-size: 0.7em; text-transform: uppercase; color: #888; }
+    .summary-bar {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color, #ddd);
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .summary-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .summary-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #888;
+      font-weight: 600;
+    }
+    body.dark .summary-label { color: #9aa3b5; }
+    .summary-value { font-size: 14px; font-weight: 500; }
+    /* Index-style run-badge shape; colours vary by trigger type */
+    .run-badge {
+      font-size: .7rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      border: 1px solid rgba(128,128,128,.4);
+      display: inline-block;
+      text-align: center;
+      box-sizing: border-box;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      min-width: 72px;
+    }
+    .run-badge.trigger-manual {
+      background: rgba(69, 90, 100, 0.18);
+      border-color: rgba(69, 90, 100, 0.55);
+      color: #37474f;
+    }
+    .run-badge.trigger-webhook {
+      background: rgba(0, 131, 143, 0.18);
+      border-color: rgba(0, 131, 143, 0.55);
+      color: #006064;
+    }
+    .run-badge.trigger-rule {
+      background: rgba(106, 27, 154, 0.18);
+      border-color: rgba(106, 27, 154, 0.55);
+      color: #4a148c;
+    }
+    .run-badge.trigger-schedule {
+      background: rgba(21, 101, 192, 0.18);
+      border-color: rgba(21, 101, 192, 0.55);
+      color: #0d47a1;
+    }
+    .run-badge.trigger-unknown {
+      background: rgba(33, 150, 243, 0.18);
+      border-color: rgba(33, 150, 243, 0.5);
+    }
+    body.dark .run-badge.trigger-manual {
+      color: #cfd8dc; background: rgba(69, 90, 100, 0.35); border-color: rgba(144, 164, 174, 0.5);
+    }
+    body.dark .run-badge.trigger-webhook {
+      color: #80deea; background: rgba(0, 131, 143, 0.35); border-color: rgba(0, 172, 193, 0.5);
+    }
+    body.dark .run-badge.trigger-rule {
+      color: #ce93d8; background: rgba(106, 27, 154, 0.35); border-color: rgba(186, 104, 200, 0.5);
+    }
+    body.dark .run-badge.trigger-schedule {
+      color: #90caf9; background: rgba(21, 101, 192, 0.35); border-color: rgba(66, 165, 245, 0.5);
+    }
+    .summary-bar { justify-content: space-between; gap: 12px 20px; }
+    .summary-item { flex: 1 1 0; min-width: 90px; }
+    /* Name can shrink/ellipsis — give Start time room for one line */
+    .summary-item.summary-name {
+      flex: 0 1 140px;
+      max-width: 200px;
+      min-width: 100px;
+    }
+    .summary-item.summary-name .summary-value {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .summary-item.summary-start {
+      flex: 1.4 1 180px;
+      min-width: 180px;
+    }
+    .summary-item.summary-start .summary-value {
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <%- include('./partials/_header'); %>
+
+  <div class="container" style="margin-top: 20px;">
+    <h5 style="margin-bottom: 8px;">
+      Orchestration Monitor
+    </h5>
+    <div class="summary-bar" id="summaryBar">
+      <div class="summary-item summary-name">
+        <span class="summary-label">Orchestration</span>
+        <span class="summary-value" id="sum-name">—</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Status</span>
+        <span id="sum-status" class="status-badge status-not-executed">—</span>
+      </div>
+      <div class="summary-item summary-start">
+        <span class="summary-label">Start time</span>
+        <span class="summary-value" id="sum-start">—</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Duration</span>
+        <span class="summary-value" id="sum-duration">—</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Source</span>
+        <span id="sum-source"><span class="run-badge trigger-unknown">—</span></span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">Progress</span>
+        <span class="summary-value"><span id="sum-visited">0</span> / <span id="sum-total">0</span></span>
+      </div>
+      <div id="sum-progress-wrap" style="flex:1;max-width:240px;display:none;align-self:center;">
+        <div style="height:8px;background:#eee;border-radius:4px;overflow:hidden;">
+          <div id="sum-progress" style="height:100%;width:0%;background:#ff9800;transition:width 0.3s;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="orchestration-container">
+      <div class="diagram-section">
+        <div id="drawflow-viewer"></div>
+        <div id="zoom-controls">
+          <button type="button" id="zoom-out">−</button>
+          <span id="zoom-level">100%</span>
+          <button type="button" id="zoom-in">+</button>
+          <button type="button" id="zoom-reset">↻</button>
+        </div>
+      </div>
+
+      <div class="details-section" id="detailsPanel">
+        <button class="details-close-btn" onclick="hideDetails()">&times;</button>
+        <div id="detailsContent">
+          <p style="color:#999;">Select a node to view execution details</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <%- include('./partials/_footer'); %>
+
+  <script src="/js/drawflow/drawflow.min.js?v=df10"></script>
+  <script src="/js/orchestration-drawflow-core.js?v=df21"></script>
+  <script src="/js/orchestration-drawflow-viewer.js?v=df34"></script>
+  <script>
+    // Materialize may be disabled — provide a safe stub
+    if (typeof M === 'undefined') {
+      window.M = { toast: function (o) { console.log('[toast]', o && o.html ? o.html : o); }, Modal: { init: function () {} } };
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const jobId = params.get('jobId');
+    const executionId = params.get('executionId');
+    const executionIndex = params.get('executionIndex') || '';
+
+    let executionData = null;
+    const inProgressNodes = new Set();
+    let selectedNodeId = null;
+    let lastStatusFingerprint = '';
+    let graphFitted = false;
+    let statusRefreshInterval = null;
+
+    function hideDetails() {
+      const panel = document.getElementById('detailsPanel');
+      if (panel) panel.classList.remove('visible');
+      selectedNodeId = null;
+    }
+
+    window.onViewerNodeSelected = function (orchId) {
+      selectedNodeId = orchId;
+      const panel = document.getElementById('detailsPanel');
+      if (panel) panel.classList.add('visible');
+      renderNodeDetails(orchId);
+    };
+
+    window.onViewerNodeDeselected = function () {
+      hideDetails();
+    };
+
+    function renderNodeDetails(nodeId) {
+      if (!executionData) return;
+      const node = (executionData.nodes || []).find(function (n) { return n.id === nodeId; });
+      if (!node) return;
+      const out = (executionData.nodeScriptOutputs || {})[nodeId] || {};
+      const visited = (executionData.visitedNodes || []).indexOf(nodeId) >= 0;
+      const isRunning = inProgressNodes.has(nodeId);
+      let statusClass = 'status-not-executed';
+      let statusText = 'Not Executed';
+      if (isRunning) { statusClass = 'status-in-progress'; statusText = 'In Progress'; }
+      else if (visited) {
+        const code = out.exitCode;
+        if (code != null && Number(code) !== 0 && node.type !== 'start' && node.type !== 'condition' && node.type !== 'split-join' && node.type !== 'end-success') {
+          statusClass = 'status-failed'; statusText = 'Failed';
+        } else {
+          statusClass = 'status-executed'; statusText = 'Completed';
+        }
+      }
+
+      let html = '<h5 style="margin-top:0;">' + (node.label || node.id) + '</h5>';
+      html += '<div class="detail-item"><span class="detail-label">Type</span><span>' + node.type + '</span></div>';
+      html += '<div class="detail-item"><span class="detail-label">Status</span><span class="status-badge ' + statusClass + '">' + statusText + '</span></div>';
+      if (out.exitCode != null) {
+        html += '<div class="detail-item"><span class="detail-label">Exit code</span><span>' + out.exitCode + '</span></div>';
+      }
+      if (out.stdout) {
+        html += '<div class="detail-item" style="grid-template-columns:1fr;"><span class="detail-label">Output</span><pre style="font-size:12px;max-height:240px;overflow:auto;background:#f5f5f5;padding:8px;border-radius:4px;white-space:pre-wrap;">' +
+          String(out.stdout).replace(/</g, '&lt;') + '</pre></div>';
+      }
+      if (executionData.errors && executionData.errors[nodeId]) {
+        html += '<div class="error-message" style="background:#ffebee;color:#b71c1c;padding:8px;border-radius:4px;margin-top:8px;">' +
+          String(executionData.errors[nodeId]).replace(/</g, '&lt;') + '</div>';
+      }
+      document.getElementById('detailsContent').innerHTML = html;
+    }
+
+    function formatDurationSeconds(seconds) {
+      if (seconds == null || isNaN(seconds) || seconds < 0) return '—';
+      const totalSeconds = Math.floor(seconds);
+      const minutes = Math.floor(totalSeconds / 60);
+      const hours = Math.floor(minutes / 60);
+      const days = Math.floor(hours / 24);
+      const remainingSeconds = totalSeconds % 60;
+      if (days > 0) return days + 'd ' + (hours % 24) + 'h ' + (minutes % 60) + 'm';
+      if (hours > 0) return hours + 'h ' + (minutes % 60) + 'm ' + remainingSeconds + 's';
+      if (minutes > 0) return minutes + 'm ' + remainingSeconds + 's';
+      if (totalSeconds > 0) return totalSeconds + 's';
+      const ms = Math.round((seconds - totalSeconds) * 1000);
+      return ms > 0 ? ms + 'ms' : '0s';
+    }
+
+    function formatStartTime(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '—';
+      try {
+        return d.toLocaleString(undefined, {
+          year: 'numeric', month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+      } catch (e) {
+        return d.toLocaleString();
+      }
+    }
+
+    function getTriggerSummary(exec) {
+      exec = exec || {};
+      if (exec.triggerSummary) {
+        const t = exec.triggerSummary;
+        return {
+          type: (t.type || 'manual').toLowerCase(),
+          label: (t.label || t.type || 'manual').toString().toUpperCase(),
+          source: t.source || t.label || 'Manual'
+        };
+      }
+      const triggerType = (exec.triggerContext && exec.triggerContext.type)
+        || (exec.mode ? String(exec.mode).toLowerCase() : 'manual');
+      const tc = exec.triggerContext || {};
+      let source = 'Manual';
+      if (triggerType === 'webhook') source = tc.webhookName || tc.name || 'Webhook';
+      else if (triggerType === 'rule') source = (tc.metric && (tc.metric.type || tc.metric.name)) || 'Rule';
+      else if (triggerType === 'schedule') source = tc.scheduleName || 'Schedule';
+      else if (exec.mode) source = exec.mode;
+      return {
+        type: String(triggerType).toLowerCase(),
+        label: String(triggerType).toUpperCase(),
+        source: source
+      };
+    }
+
+    function renderSourcePill(exec) {
+      const trigger = getTriggerSummary(exec);
+      let type = String(trigger.type || 'manual').toLowerCase();
+      if (['manual', 'webhook', 'rule', 'schedule'].indexOf(type) < 0) type = 'unknown';
+      // Index uses Capitalised labels (Manual, Webhook, …); keep uppercase for consistency with that page's CSS transform
+      const labelMap = { manual: 'Manual', webhook: 'Webhook', rule: 'Rule', schedule: 'Schedule', unknown: '—' };
+      const label = labelMap[type] || trigger.label || type;
+      return '<span class="run-badge trigger-' + type + '" title="' +
+        String(trigger.source || label).replace(/"/g, '&quot;') + '">' + label + '</span>';
+    }
+
+    function updateSummary() {
+      if (!executionData) return;
+      const exec = executionData.execution || {};
+
+      // Prefer API jobName — never show internal job id
+      const name = executionData.jobName || exec.name || exec.jobName ||
+        exec.orchestrationName || executionData.name || '—';
+      document.getElementById('sum-name').textContent = name;
+
+      // Status
+      let st = exec.status || 'unknown';
+      let statusText = st;
+      let statusClass = 'status-not-executed';
+      if (exec.finalStatus === 'success' || st === 'completed') {
+        statusText = 'Success';
+        statusClass = 'status-executed';
+        st = 'completed';
+      } else if (exec.finalStatus === 'failure' || exec.finalStatus === 'error' || st === 'failed') {
+        statusText = 'Failed';
+        statusClass = 'status-failed';
+        st = 'failed';
+      } else if (st === 'running' || st === 'in-progress') {
+        statusText = 'In progress';
+        statusClass = 'status-in-progress';
+        st = 'running';
+      }
+      const el = document.getElementById('sum-status');
+      el.textContent = statusText;
+      el.className = 'status-badge ' + statusClass;
+
+      // Start time
+      document.getElementById('sum-start').textContent = formatStartTime(exec.startTime);
+
+      // Duration: prefer exec.duration (ms) else end-start else live elapsed
+      let durationStr = '—';
+      if (exec.duration != null && !isNaN(exec.duration)) {
+        // duration may be ms or seconds — treat values > 10000 as ms
+        const secs = exec.duration > 10000 ? exec.duration / 1000 : exec.duration;
+        durationStr = formatDurationSeconds(secs);
+      } else if (exec.startTime) {
+        const startMs = new Date(exec.startTime).getTime();
+        const endMs = exec.endTime ? new Date(exec.endTime).getTime() : Date.now();
+        if (!isNaN(startMs) && !isNaN(endMs) && endMs >= startMs) {
+          durationStr = formatDurationSeconds((endMs - startMs) / 1000);
+          if (st === 'running' && !exec.endTime) durationStr += '…';
+        }
+      }
+      document.getElementById('sum-duration').textContent = durationStr;
+
+      // Source pill (manual / webhook / rule / schedule)
+      document.getElementById('sum-source').innerHTML = renderSourcePill(exec);
+
+      const total = (executionData.nodes || []).length;
+      const visited = (executionData.visitedNodes || []).length;
+      document.getElementById('sum-total').textContent = total;
+      document.getElementById('sum-visited').textContent = visited;
+      const wrap = document.getElementById('sum-progress-wrap');
+      if (st === 'running') {
+        wrap.style.display = '';
+        document.getElementById('sum-progress').style.width = (total ? Math.round(visited / total * 100) : 0) + '%';
+      } else {
+        wrap.style.display = 'none';
+      }
+    }
+
+    function applyLiveStatus() {
+      const map = OrchViewer.statusesFromExecution(executionData, inProgressNodes);
+      // Skip DOM work when nothing changed — preserves marching-ants animation
+      const fp = Object.keys(map).sort().map(function (k) { return k + ':' + map[k]; }).join('|');
+      if (fp === lastStatusFingerprint) {
+        // Still refresh details panel / summary text if needed, but not node classes
+        updateSummary();
+        return;
+      }
+      lastStatusFingerprint = fp;
+      if (window.__orchStatusDebug !== false) {
+        const counts = { pending: 0, 'in-progress': 0, completed: 0, failed: 0 };
+        Object.keys(map).forEach(function (k) { counts[map[k]] = (counts[map[k]] || 0) + 1; });
+        console.log('[OrchMonitor] status map', counts, 'inProgress=', Array.from(inProgressNodes));
+      }
+      OrchViewer.updateStatuses(map);
+      updateSummary();
+      if (selectedNodeId) renderNodeDetails(selectedNodeId);
+    }
+
+    async function fetchExecution() {
+      if (!jobId) return;
+      // Same endpoint as the classic monitor
+      let url = '/orchestration/execution/details?jobId=' + encodeURIComponent(jobId);
+      if (executionId) {
+        url += '&executionId=' + encodeURIComponent(executionId);
+      }
+      if (executionIndex) {
+        url += '&executionIndex=' + encodeURIComponent(executionIndex);
+      }
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        // Normalize field names used by OrchViewer / details panel
+        if (!data.nodeScriptOutputs && data.scriptOutputs) {
+          data.nodeScriptOutputs = data.scriptOutputs;
+        }
+        if (!data.nodes && data.formattedNodes) {
+          data.nodes = data.formattedNodes;
+        }
+        executionData = data;
+        if (!OrchViewer.getEditor()) {
+          OrchViewer.init('drawflow-viewer');
+          wireZoom();
+        }
+        // Load graph once when we have nodes and canvas is empty
+        const needGraph = (data.nodes && data.nodes.length) &&
+          (!OrchViewer.getNodeCount || OrchViewer.getNodeCount() === 0);
+        if (needGraph) {
+          OrchViewer.loadGraph(data.nodes || [], data.edges || []);
+        }
+        inProgressNodes.clear();
+        const execSt = String((data.execution && data.execution.status) || '').toLowerCase();
+        const finalSt = String((data.execution && data.execution.finalStatus) || '').toLowerCase();
+        const stillRunning = !(
+          execSt === 'completed' || execSt === 'failed' || execSt === 'error' ||
+          finalSt === 'success' || finalSt === 'failure' || finalSt === 'error' ||
+          data.isInProgress === false
+        ) && !!(data.isInProgress || execSt === 'running' || execSt === 'in-progress');
+
+        if (stillRunning) {
+          if (data.inProgressNodes) {
+            data.inProgressNodes.forEach(function (id) { inProgressNodes.add(id); });
+          }
+          if (data.execution && data.execution.currentNode) {
+            inProgressNodes.add(data.execution.currentNode);
+          }
+          if (data.currentNode) {
+            inProgressNodes.add(data.currentNode);
+          }
+          const outs = data.nodeScriptOutputs || data.scriptOutputs || {};
+          Object.keys(outs).forEach(function (nid) {
+            if (outs[nid] && (outs[nid].status === 'in-progress' || outs[nid].status === 'running')) {
+              inProgressNodes.add(nid);
+            }
+          });
+          if (!inProgressNodes.size && Array.isArray(data.visitedNodes) && data.visitedNodes.length) {
+            inProgressNodes.add(data.visitedNodes[data.visitedNodes.length - 1]);
+          }
+          (data.nodes || []).forEach(function (n) {
+            if (n.status === 'in-progress' || n.inProgress) inProgressNodes.add(n.id);
+          });
+        }
+        // When finished: leave inProgressNodes empty so marching ants clear
+        applyLiveStatus();
+        // Fit once after graph is first loaded — never on subsequent polls
+        if (!graphFitted && OrchViewer.getNodeCount && OrchViewer.getNodeCount() > 0) {
+          graphFitted = true;
+          if (OrchViewer.focusGraphInView) {
+            OrchViewer.focusGraphInView();
+          } else if (OrchViewer.fitView) {
+            requestAnimationFrame(function () { OrchViewer.fitView(); });
+          }
+        }
+
+        if (!stillRunning) {
+          if (statusRefreshInterval) {
+            clearInterval(statusRefreshInterval);
+            statusRefreshInterval = null;
+          }
+        }
+      } catch (e) {
+        console.warn('fetchExecution', e);
+      }
+    }
+
+    function wireZoom() {
+      const ed = OrchViewer.getEditor();
+      if (!ed) return;
+      const label = document.getElementById('zoom-level');
+      document.getElementById('zoom-in').onclick = function () {
+        ed.zoom_in();
+        if (label) label.textContent = Math.round(ed.zoom * 100) + '%';
+      };
+      document.getElementById('zoom-out').onclick = function () {
+        ed.zoom_out();
+        if (label) label.textContent = Math.round(ed.zoom * 100) + '%';
+      };
+      document.getElementById('zoom-reset').onclick = function () {
+        ed.zoom_reset();
+        if (label) label.textContent = '100%';
+      };
+    }
+
+    // Optional live log socket hooks (compatible with existing monitor events)
+    function attachSocketHints() {
+      if (typeof io === 'undefined') return;
+      try {
+        const socket = io();
+        socket.on('orchestration:node:start', function (msg) {
+          if (!msg || msg.jobId !== jobId) return;
+          inProgressNodes.add(msg.nodeId);
+          applyLiveStatus();
+        });
+        socket.on('orchestration:node:end', function (msg) {
+          if (!msg || msg.jobId !== jobId) return;
+          inProgressNodes.delete(msg.nodeId);
+          if (executionData) {
+            if (!executionData.visitedNodes) executionData.visitedNodes = [];
+            if (executionData.visitedNodes.indexOf(msg.nodeId) < 0) {
+              executionData.visitedNodes.push(msg.nodeId);
+            }
+            if (!executionData.nodeScriptOutputs) executionData.nodeScriptOutputs = {};
+            if (!executionData.nodeScriptOutputs[msg.nodeId]) executionData.nodeScriptOutputs[msg.nodeId] = {};
+            if (msg.exitCode != null) executionData.nodeScriptOutputs[msg.nodeId].exitCode = msg.exitCode;
+            if (msg.stdout) executionData.nodeScriptOutputs[msg.nodeId].stdout = msg.stdout;
+          }
+          applyLiveStatus();
+        });
+      } catch (e) { /* sockets optional */ }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      if (!jobId) {
+        document.getElementById('sum-name').textContent = 'Missing execution';
+        return;
+      }
+      fetchExecution();
+      statusRefreshInterval = setInterval(fetchExecution, 2000);
+      attachSocketHints();
+    });
+  </script>
+</body>
+</html>
