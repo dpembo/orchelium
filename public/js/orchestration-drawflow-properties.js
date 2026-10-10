@@ -48,7 +48,65 @@
   }
 
   function populatePluginPalette() {
-    /* handled by Drawflow builder page */
+    var container = document.getElementById('plugin-palette-items');
+    var section = document.getElementById('plugin-palette-section');
+    if (!container || !section) return;
+    container.innerHTML = '';
+    if (!availablePlugins.length) {
+      section.style.display = 'none';
+      return;
+    }
+    availablePlugins.forEach(function (plugin) {
+      var item = document.createElement('div');
+      item.className = 'palette-item';
+      item.draggable = true;
+      item.dataset.nodeType = 'plugin';
+      item.dataset.pluginName = plugin.name;
+      var iconHtml = plugin.iconSvg
+        ? '<img class="orch-plugin-icon" src="data:image/svg+xml,' + encodeURIComponent(plugin.iconSvg) +
+          '" width="18" height="18" style="flex-shrink:0;vertical-align:middle;" alt="" draggable="false">'
+        : '<i class="material-icons">extension</i>';
+      var label = plugin.label || plugin.name || 'Plugin';
+      item.innerHTML = iconHtml + '<span>' + String(label).replace(/</g, '&lt;') + '</span>';
+      item.addEventListener('dragstart', function (e) {
+        e.dataTransfer.setData('text/plain', 'plugin');
+        e.dataTransfer.setData('nodeType', 'plugin');
+        e.dataTransfer.setData('pluginName', plugin.name);
+        e.dataTransfer.setData('plugin-name', plugin.name);
+      });
+      container.appendChild(item);
+    });
+    section.style.display = '';
+
+    // Re-bind palette drag on Drawflow editor (items added after init)
+    if (global.OrchEditor && typeof global.OrchEditor.rebindPalette === 'function') {
+      try { global.OrchEditor.rebindPalette(); } catch (e) { /* ignore */ }
+    }
+  }
+
+  /** Attach plugin SVG icons onto existing plugin nodes and refresh canvas HTML */
+  function refreshPluginNodeIcons() {
+    var nodeMap = nodes();
+    Object.keys(nodeMap).forEach(function (id) {
+      var n = nodeMap[id];
+      if (!n || n.type !== 'plugin' || !n.data || !n.data.pluginName) return;
+      var meta = null;
+      if (global.OrchDrawflow && OrchDrawflow.getPluginMeta) {
+        meta = OrchDrawflow.getPluginMeta(n.data.pluginName);
+      }
+      if (!meta) {
+        meta = availablePlugins.find(function (p) { return p.name === n.data.pluginName; }) || null;
+      }
+      if (meta && meta.iconSvg) {
+        n.data.iconSvg = meta.iconSvg;
+        if (meta.label && (!n.label || n.label === n.data.pluginName || n.label === 'Plugin')) {
+          n.label = meta.label;
+        }
+      }
+      if (global.OrchEditor && typeof global.OrchEditor.refreshNode === 'function') {
+        try { global.OrchEditor.refreshNode(id); } catch (e) { /* ignore */ }
+      }
+    });
   }
 
 
@@ -1077,7 +1135,12 @@ function normalizeAlias(name) {
         type: 'GET',
         success: function(plugins) {
           availablePlugins = plugins || [];
+          if (global.OrchDrawflow && OrchDrawflow.setPluginCatalog) {
+            OrchDrawflow.setPluginCatalog(availablePlugins);
+          }
           populatePluginPalette();
+          // Icons may arrive after the graph is already drawn — refresh plugin nodes
+          refreshPluginNodeIcons();
         }
       });
     }

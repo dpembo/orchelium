@@ -537,15 +537,25 @@
 
   // ── Palette drop ──────────────────────────────────────────────────────
 
-  function setupPaletteDrop(container) {
-    document.querySelectorAll('.palette-item[draggable="true"]').forEach(function (item) {
-      item.addEventListener('dragstart', function (e) {
-        e.dataTransfer.setData('nodeType', item.dataset.nodeType || '');
-        if (item.dataset.pluginName) {
-          e.dataTransfer.setData('pluginName', item.dataset.pluginName);
-        }
-      });
+  function bindPaletteItemDrag(item) {
+    if (!item || item.dataset.dfDragBound === '1') return;
+    item.dataset.dfDragBound = '1';
+    item.addEventListener('dragstart', function (e) {
+      e.dataTransfer.setData('nodeType', item.dataset.nodeType || '');
+      e.dataTransfer.setData('text/plain', item.dataset.nodeType || '');
+      if (item.dataset.pluginName) {
+        e.dataTransfer.setData('pluginName', item.dataset.pluginName);
+        e.dataTransfer.setData('plugin-name', item.dataset.pluginName);
+      }
     });
+  }
+
+  function rebindPalette() {
+    document.querySelectorAll('.palette-item[draggable="true"]').forEach(bindPaletteItemDrag);
+  }
+
+  function setupPaletteDrop(container) {
+    rebindPalette();
 
     container.addEventListener('dragover', function (e) {
       e.preventDefault();
@@ -651,6 +661,17 @@
       // Coerce coords (API may send strings); classic SVG used center-ish coords
       const nx = Number(n.x);
       const ny = Number(n.y);
+      const data = Object.assign({}, n.data || {});
+      // Resolve plugin SVG from catalog if not already stored on the node
+      if (n.type === 'plugin' && data.pluginName && !data.iconSvg &&
+          OrchDrawflow.resolvePluginIconSvg) {
+        const svg = OrchDrawflow.resolvePluginIconSvg({ type: 'plugin', data: data });
+        if (svg) data.iconSvg = svg;
+        const meta = OrchDrawflow.getPluginMeta && OrchDrawflow.getPluginMeta(data.pluginName);
+        if (meta && meta.label && (!n.label || n.label === data.pluginName || n.label === 'Plugin')) {
+          n.label = meta.label;
+        }
+      }
       nodes[n.id] = {
         id: n.id,
         label: n.label || n.type || 'Node',
@@ -658,7 +679,7 @@
         icon: n.icon,
         x: Number.isFinite(nx) ? nx : 100,
         y: Number.isFinite(ny) ? ny : 100,
-        data: n.data || {}
+        data: data
       };
     });
     (orch.edges || []).forEach(function (e) {
@@ -2059,7 +2080,9 @@
     normalizeGraphOrigin: normalizeGraphOrigin,
     autoLayout: autoLayout,
     refreshPortClasses: refreshAllPortMultiClasses,
-    onSplitJoinModeChanged: onSplitJoinModeChanged
+    onSplitJoinModeChanged: onSplitJoinModeChanged,
+    refreshNode: syncNodeFromProperties,
+    rebindPalette: rebindPalette
   };
 
   /**

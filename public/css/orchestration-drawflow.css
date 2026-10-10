@@ -156,6 +156,18 @@ body.dark .drawflow .drawflow-node.selected:hover {
   color: #ff9800;
 }
 
+/* Plugin custom SVG icons (same data as classic builder iconSvg) */
+.orch-df-title img.orch-plugin-icon,
+.palette-item img.orch-plugin-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  object-fit: contain;
+  display: inline-block;
+  vertical-align: middle;
+  pointer-events: none;
+}
+
 .orch-df-label {
   flex: 1;
   overflow: hidden;

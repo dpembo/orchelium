@@ -365,6 +365,28 @@
     return map;
   }
 
+  /** After plugin catalog loads, re-render plugin node HTML with SVG icons */
+  function refreshPluginIcons() {
+    if (!editor || !currentNodes.length) return;
+    currentNodes.forEach(function (node) {
+      if (!node || node.type !== 'plugin') return;
+      const name = node.data && node.data.pluginName;
+      if (!name) return;
+      const meta = OrchDrawflow.getPluginMeta && OrchDrawflow.getPluginMeta(name);
+      if (meta && meta.iconSvg) {
+        if (!node.data) node.data = {};
+        node.data.iconSvg = meta.iconSvg;
+        if (meta.label && (!node.label || node.label === name || node.label === 'Plugin')) {
+          node.label = meta.label;
+        }
+      }
+      const dfId = dfIdByOrch[node.id];
+      if (dfId != null) {
+        OrchDrawflow.refreshNodeHtml(editor, dfId, node);
+      }
+    });
+  }
+
   global.OrchViewer = {
     init: init,
     loadGraph: loadGraph,
@@ -373,6 +395,7 @@
     fitView: fitView,
     focusGraphInView: focusGraphInView,
     expandCanvasExtents: expandCanvasExtents,
+    refreshPluginIcons: refreshPluginIcons,
     getEditor: function () { return editor; },
     getNodeCount: function () { return Object.keys(dfIdByOrch).length; },
     getOrchId: function (dfId) { return orchIdByDf[String(dfId)]; },

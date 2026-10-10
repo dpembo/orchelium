@@ -43,6 +43,34 @@
     plugin: 'extension'
   };
 
+  /** pluginName → iconSvg (from /rest/orchestration/plugins) */
+  let pluginIconByName = {};
+  /** pluginName → { name, label, iconSvg, ... } */
+  let pluginMetaByName = {};
+
+  function setPluginCatalog(plugins) {
+    pluginIconByName = {};
+    pluginMetaByName = {};
+    (plugins || []).forEach(function (p) {
+      if (!p || !p.name) return;
+      pluginMetaByName[p.name] = p;
+      if (p.iconSvg) pluginIconByName[p.name] = p.iconSvg;
+    });
+  }
+
+  function getPluginMeta(name) {
+    if (!name) return null;
+    return pluginMetaByName[name] || null;
+  }
+
+  function resolvePluginIconSvg(node) {
+    if (!node) return null;
+    if (node.data && node.data.iconSvg) return node.data.iconSvg;
+    const name = node.data && node.data.pluginName;
+    if (name && pluginIconByName[name]) return pluginIconByName[name];
+    return null;
+  }
+
   /**
    * Port geometry + multiplicity rules.
    * Accepts a type string or a full node object (for split-join mode).
@@ -62,13 +90,27 @@
   }
 
   function iconFor(node) {
-    if (node.icon) return node.icon;
+    if (node.icon && node.icon !== 'extension') return node.icon;
     if (node.type === 'execute' && node.data && node.data.executeType === 'http') return 'http';
+    if (node.type === 'plugin') return 'extension';
     return ICON_MAP[node.type] || 'device_hub';
   }
 
-  function nodeHtml(node) {
+  function iconHtmlFor(node) {
+    // Plugin nodes: prefer custom SVG (same as classic builder)
+    if (node.type === 'plugin') {
+      const svg = resolvePluginIconSvg(node);
+      if (svg) {
+        return '<img class="orch-plugin-icon" src="data:image/svg+xml,' +
+          encodeURIComponent(svg) +
+          '" width="18" height="18" alt="" draggable="false">';
+      }
+    }
     const icon = iconFor(node);
+    return '<i class="material-icons">' + escapeHtml(icon) + '</i>';
+  }
+
+  function nodeHtml(node) {
     const label = escapeHtml(node.label || node.type || 'Node');
     const typeClass = (node.type || 'unknown').replace(/[^a-z0-9-]/gi, '');
     const sjModeClass = (node.type === 'split-join')
@@ -84,7 +126,8 @@
     } else if (node.type === 'wait' && node.data) {
       sub = escapeHtml((node.data.waitSeconds || 5) + 's');
     } else if (node.type === 'plugin' && node.data) {
-      sub = escapeHtml(node.data.pluginName || '');
+      const meta = getPluginMeta(node.data.pluginName);
+      sub = escapeHtml((meta && meta.label) || node.data.pluginName || '');
     } else if (node.type === 'condition' && node.data) {
       sub = escapeHtml((node.data.testType || 'returnCode') + ' ' + (node.data.operator || '==') + ' ' + (node.data.value != null ? node.data.value : ''));
     } else if (node.type === 'split-join') {
@@ -95,7 +138,7 @@
     return (
       '<div class="orch-df-node orch-df-' + typeClass + sjModeClass + '">' +
         '<div class="orch-df-title">' +
-          '<i class="material-icons">' + icon + '</i>' +
+          iconHtmlFor(node) +
           '<span class="orch-df-label">' + label + '</span>' +
         '</div>' +
         (sub ? '<div class="orch-df-sub">' + sub + '</div>' : '') +
@@ -331,11 +374,18 @@
         base.label = 'Failure';
         base.icon = 'error';
         break;
-      case 'plugin':
-        base.label = extra.pluginName || 'Plugin';
+      case 'plugin': {
+        const pName = extra.pluginName || '';
+        const meta = getPluginMeta(pName) || {};
+        base.label = meta.label || pName || 'Plugin';
         base.icon = 'extension';
-        base.data = { pluginName: extra.pluginName || '', pluginTimeoutMs: 300000 };
+        base.data = {
+          pluginName: pName,
+          pluginTimeoutMs: 300000
+        };
+        if (meta.iconSvg) base.data.iconSvg = meta.iconSvg;
         break;
+      }
       default:
         break;
     }
@@ -462,6 +512,9 @@
     nodeHtml: nodeHtml,
     refreshNodeHtml: refreshNodeHtml,
     applyStatusClasses: applyStatusClasses,
+    setPluginCatalog: setPluginCatalog,
+    getPluginMeta: getPluginMeta,
+    resolvePluginIconSvg: resolvePluginIconSvg,
     ICON_MAP: ICON_MAP,
     PORT_MAP: PORT_MAP
   };

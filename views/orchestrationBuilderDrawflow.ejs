@@ -15,7 +15,7 @@ function isSelected(inValue, compareValue) {
   <link rel="stylesheet" href="/css/drawflow.min.css?v=df7">
   <link rel="stylesheet" href="/css/spectrum/spectrum.min.css">
   <script src="/js/spectrum/spectrum.min.js"></script>
-  <link rel="stylesheet" href="/css/orchestration-drawflow.css?v=df33">
+  <link rel="stylesheet" href="/css/orchestration-drawflow.css?v=df35">
   <style>
     html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
     /* Fill remaining viewport under the global app header */
@@ -801,9 +801,9 @@ When unchecked (default), execution continues through the graph to a Success or 
   </div>
 
   <script src="/js/drawflow/drawflow.min.js?v=df7"></script>
-  <script src="/js/orchestration-drawflow-core.js?v=df21"></script>
-  <script src="/js/orchestration-drawflow-editor.js?v=df32"></script>
-  <script src="/js/orchestration-drawflow-properties.js?v=df29"></script>
+  <script src="/js/orchestration-drawflow-core.js?v=df35"></script>
+  <script src="/js/orchestration-drawflow-editor.js?v=df35"></script>
+  <script src="/js/orchestration-drawflow-properties.js?v=df35"></script>
   <script>
     let orchestrationId = '<%= typeof jobId !== "undefined" ? jobId : "" %>'.trim() || null;
     let orchestrationName = <%- JSON.stringify(typeof jobName !== 'undefined' ? jobName : '') %>;
@@ -1264,29 +1264,8 @@ When unchecked (default), execution continues through the graph to a Success or 
           error: function () { M.toast({ html: 'Failed to load orchestration' }); }
         });
       }
-      $.ajax({
-        url: '/rest/orchestration/plugins', type: 'GET',
-        success: function (plugins) {
-          window.availablePlugins = plugins || [];
-          if (!plugins || !plugins.length) return;
-          document.getElementById('plugin-palette-section').style.display = '';
-          const host = document.getElementById('plugin-palette-items');
-          plugins.forEach(function (p) {
-            const name = p.name || p.id;
-            const div = document.createElement('div');
-            div.className = 'palette-item';
-            div.draggable = true;
-            div.dataset.nodeType = 'plugin';
-            div.dataset.pluginName = name;
-            div.innerHTML = '<i class="material-icons">extension</i><span>' + name + '</span>';
-            host.appendChild(div);
-            div.addEventListener('dragstart', function (e) {
-              e.dataTransfer.setData('nodeType', 'plugin');
-              e.dataTransfer.setData('pluginName', name);
-            });
-          });
-        }
-      });
+      // Plugins / palette icons are loaded via OrchProperties.boot() → loadPlugins()
+      // which calls OrchDrawflow.setPluginCatalog + populatePluginPalette (SVG icons).
     });
   </script>
 </body>

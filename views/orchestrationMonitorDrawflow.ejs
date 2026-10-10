@@ -6,7 +6,7 @@
   <title>Orchestration Monitor</title>
   <%- include('./partials/_head'); %>
   <link rel="stylesheet" href="/css/drawflow.min.css">
-  <link rel="stylesheet" href="/css/orchestration-drawflow.css?v=df34">
+  <link rel="stylesheet" href="/css/orchestration-drawflow.css?v=df35">
   <style>
     .orchestration-container {
       display: grid;
@@ -225,8 +225,8 @@
   <%- include('./partials/_footer'); %>
 
   <script src="/js/drawflow/drawflow.min.js?v=df10"></script>
-  <script src="/js/orchestration-drawflow-core.js?v=df21"></script>
-  <script src="/js/orchestration-drawflow-viewer.js?v=df34"></script>
+  <script src="/js/orchestration-drawflow-core.js?v=df35"></script>
+  <script src="/js/orchestration-drawflow-viewer.js?v=df35"></script>
   <script>
     // Materialize may be disabled — provide a safe stub
     if (typeof M === 'undefined') {
@@ -479,6 +479,7 @@
           (!OrchViewer.getNodeCount || OrchViewer.getNodeCount() === 0);
         if (needGraph) {
           OrchViewer.loadGraph(data.nodes || [], data.edges || []);
+          if (OrchViewer.refreshPluginIcons) OrchViewer.refreshPluginIcons();
         }
         inProgressNodes.clear();
         const execSt = String((data.execution && data.execution.status) || '').toLowerCase();
@@ -581,14 +582,31 @@
       } catch (e) { /* sockets optional */ }
     }
 
+    function loadPluginCatalog() {
+      return fetch('/rest/orchestration/plugins')
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (plugins) {
+          if (window.OrchDrawflow && OrchDrawflow.setPluginCatalog) {
+            OrchDrawflow.setPluginCatalog(plugins || []);
+          }
+          if (window.OrchViewer && OrchViewer.refreshPluginIcons) {
+            OrchViewer.refreshPluginIcons();
+          }
+        })
+        .catch(function () { /* optional */ });
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
       if (!jobId) {
         document.getElementById('sum-name').textContent = 'Missing execution';
         return;
       }
-      fetchExecution();
-      statusRefreshInterval = setInterval(fetchExecution, 2000);
-      attachSocketHints();
+      // Load plugin SVGs first so nodes render with real icons when the graph appears
+      loadPluginCatalog().finally(function () {
+        fetchExecution();
+        statusRefreshInterval = setInterval(fetchExecution, 2000);
+        attachSocketHints();
+      });
     });
   </script>
 </body>
