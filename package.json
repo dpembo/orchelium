@@ -51,7 +51,7 @@
         "moment-timezone": "^0.6.5",
         "monaco-editor": "^0.57.0",
         "mongoose": "^9.11.1",
-        "mqtt": "^5.15.1",
+        "mqtt": "^5.16.1",
         "multer": "^2.4.0",
         "nanoid": "^6.0.1",
         "node-schedule": "^2.1.1",
