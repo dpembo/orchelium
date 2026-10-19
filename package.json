@@ -65,7 +65,7 @@
         "socket.io": "^4.8.4",
         "text-encoding-utf-8": "^1.0.2",
         "unzipper": "^0.12.5",
-        "ws": "^8.21.0"
+        "ws": "^8.22.0"
     },
     "devDependencies": {
         "ejs-lint": "^2.0.0",
