@@ -3,8 +3,8 @@ var messProcessor = require('../agentMessageProcessor.js');
 //var debug = undefined;
   
 //const brokerUrl = 'mqtt://' + MQTT_SERVER + ':' + MQTT_SERVER_PORT;
-const status_topic = 'backup/agent/status';
-const command_topic = 'backup/agent/command';
+const status_topic = 'orchelium/agent/status';
+const command_topic = 'orchelium/agent/command';
 var client;
 let mqttReconnectTimeout;
 var connectionTimeoutCallback;
