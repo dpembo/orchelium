@@ -30,6 +30,10 @@
   let nodeDragMoved = false;
   let pointerDownOnNode = false;
   let selectPointerStart = null;
+  // True when the properties panel was already open for this node before the gesture
+  let panelWasOpenForSelection = false;
+  // Set in the capture phase, before Drawflow clears editor.connection on drop
+  let connectionGesture = false;
   let clipboardNode = null; // deep-cloned node data for copy/paste
   let edgePanRaf = null;
   let edgePanActive = false;
@@ -137,6 +141,10 @@
     editor.on('nodeSelected', function (dfId) {
       if (suppressEvents) return;
       const orchId = orchIdByDf[String(dfId)];
+      const panel = document.getElementById('orchestration-properties');
+      panelWasOpenForSelection = !!(
+        panel && panel.classList.contains('show') && orchId && selectedOrchId === orchId
+      );
       selectedOrchId = orchId || null;
       pendingSelectOrchId = orchId || null;
       nodeDragMoved = false;
@@ -216,20 +224,52 @@
       return true;
     }
 
+    // Drawflow clears editor.connection inside its own mouseup, which is registered
+    // before this one. Capture the flag first so a wire drop is not a click.
+    function noteConnectionGesture() {
+      if (editor.connection) connectionGesture = true;
+    }
+    editor.container.addEventListener('mousedown', function () {
+      connectionGesture = false;
+    }, true);
+    editor.container.addEventListener('mouseup', noteConnectionGesture, true);
+    editor.container.addEventListener('touchend', noteConnectionGesture, true);
+
     // Single mouseup handler on the Drawflow container:
-    //  - node / connector → open properties for that node
+    //  - node click → open properties for that node
+    //  - node drag or wire drop → do not select
     //  - empty canvas → deselect
     editor.container.addEventListener('mouseup', function (ev) {
       if (suppressEvents) return;
+
+      if (connectionGesture) {
+        connectionGesture = false;
+        pointerDownOnNode = false;
+        pendingSelectOrchId = null;
+        selectPointerStart = null;
+        nodeDragMoved = false;
+        return;
+      }
 
       const nodeEl = ev.target && ev.target.closest && ev.target.closest('.drawflow-node');
       if (nodeEl) {
         // id is "node-N"
         const dfId = String(nodeEl.id || '').replace(/^node-/, '');
         const orchId = orchIdByDf[dfId] || selectedOrchId || pendingSelectOrchId;
+        const dragged = nodeDragMoved;
         pointerDownOnNode = false;
         pendingSelectOrchId = null;
         selectPointerStart = null;
+        nodeDragMoved = false;
+        // Moving a node selects it on press. A drag is not a click, so do not
+        // open the properties panel when the pointer is released.
+        if (dragged) {
+          if (!panelWasOpenForSelection) {
+            selectedOrchId = null;
+            clearDrawflowSelection();
+          }
+          return;
+        }
         if (orchId) {
           selectedOrchId = orchId;
           // Ensure Drawflow selection class is present

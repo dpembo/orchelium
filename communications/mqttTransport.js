@@ -1,10 +1,11 @@
 var mqtt = require('mqtt');
 var messProcessor = require('../agentMessageProcessor.js');
+const { TOPICS } = require('../shared/protocol');
 //var debug = undefined;
   
 //const brokerUrl = 'mqtt://' + MQTT_SERVER + ':' + MQTT_SERVER_PORT;
-const status_topic = 'orchelium/agent/status';
-const command_topic = 'orchelium/agent/command';
+const status_topic = TOPICS.status;
+const command_topic = TOPICS.command;
 var client;
 let mqttReconnectTimeout;
 var connectionTimeoutCallback;

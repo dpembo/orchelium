@@ -4,6 +4,8 @@
   "description": "Agent for Orchelium",
   "main": "agent.js",
   "scripts": {
+    "build": "node build.js",
+    "start": "node agent.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
@@ -23,6 +25,7 @@
     "uuid": "^14.0.3"
   },
   "devDependencies": {
+    "esbuild": "^0.25.12",
     "jest": "^30.5.2"
   }
 }

@@ -96,7 +96,7 @@ jobs:
       - name: Install agent dependencies
         run: |
           cd agent
-          npm ci
+          npm ci --include=dev
 
       - name: Run agent tests (with coverage)
         run: |
@@ -138,6 +138,9 @@ jobs:
           echo "Setting version number in hub and agent build"
           replace_text "$findText" "$replText" version.js
           replace_text "$findText" "$replText" ./agent/version.js
+
+          echo "Assemble standalone agent.js before packaging"
+          npm run build --prefix agent
 
           echo "Create the agent tar for install from the web ux"
           tar -cvf ./public/agent/agent.tar -C ./agent .
@@ -206,7 +209,7 @@ jobs:
         id: build-and-push-agent
         uses: docker/build-push-action@v5
         with:
-          context: ./agent
+          context: .
           file: ./agent/Dockerfile
           push: true
           tags: |

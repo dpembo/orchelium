@@ -1,8 +1,8 @@
 const { initServerConfig } = require("../configuration");
 const { publishMessage } = require("./mqttTransport");
+const { TOPICS, applyExecutionContext } = require("../shared/protocol");
 
-const status_topic = 'backup/agent/status';
-const command_topic = 'backup/agent/command';
+const command_topic = TOPICS.command;
 
 
 function getCurrentStack(skipFrames = 1) {
@@ -40,11 +40,7 @@ function sendCommand(agent_id, topic, command, commandParams, jobName, commsType
     }
 
     if (executionMetadata && typeof executionMetadata === 'object') {
-        message.executionMode = executionMetadata.executionMode || null;
-        message.scriptName = executionMetadata.scriptName || null;
-        message.scriptIdentity = executionMetadata.scriptIdentity || null;
-        message.sourceType = executionMetadata.sourceType || null;
-        message.scriptLabel = executionMetadata.scriptLabel || null;
+        applyExecutionContext(message, executionMetadata);
     }
 
     var token = passman.createJWTToken(message,1);

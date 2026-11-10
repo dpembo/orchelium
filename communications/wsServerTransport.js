@@ -4,11 +4,9 @@ const url = require('url');
 var messProcessor = require('../agentMessageProcessor.js');
 const notifier = require('../notify.js');
 
-// Configuration
+// Configuration. Command and status topic names come from shared/protocol
+// and are chosen by the caller (agentCommunication) when it publishes.
 const PORT = serverConfig.websocket_server.port;
-const WS_TOPIC_COMMAND = 'backup/agent/command';
-const WS_TOPIC_STATUS = 'backup/agent/status';
-const WS_LOG_STATUS = 'backup/agent/log';
 
 // State management
 const wsClients = new Map(); // connectionId -> WebSocket

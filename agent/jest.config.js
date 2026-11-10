@@ -3,7 +3,8 @@ module.exports = {
   coveragePathIgnorePatterns: ['/node_modules/'],
   testMatch: ['**/tests/**/*.test.js'],
   collectCoverageFrom: [
-    'agent.js',
+    'src/**/*.js',
+    '../shared/**/*.js',
   ],
   testTimeout: 10000,
   // Ignore node_modules in tests

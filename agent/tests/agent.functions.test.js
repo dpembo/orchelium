@@ -1,6 +1,6 @@
-// Tests for pure utility functions and routing logic from agent.js
-// Since agent.js is a monolith with no exports, functions are replicated here
-// to test their logic in isolation.
+// Tests for agent utility behavior.
+// Pure contract helpers come from shared/. Logic that still lives inline in the
+// agent modules is replicated here until those modules are required directly.
 
 jest.mock('fs');
 jest.mock('child_process');
@@ -9,17 +9,19 @@ jest.mock('os');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const { padStringTo256Bits } = require('../../shared/keyMaterial');
+const { returnCodeFromExit: getReturnCodeFromExit, TOPICS } = require('../../shared/protocol');
 
 // ─── getReturnCodeFromExit ────────────────────────────────────────────────────
 
-describe('getReturnCodeFromExit', () => {
-  function getReturnCodeFromExit(code, signal) {
-    if (signal === 'SIGKILL') return 999;
-    if (signal === 'SIGTERM') return 998;
-    if (code === null || code === undefined) return 99999;
-    return code;
-  }
+describe('shared topics', () => {
+  it('uses the orchelium command and status topics', () => {
+    expect(TOPICS.command).toBe('orchelium/agent/command');
+    expect(TOPICS.status).toBe('orchelium/agent/status');
+  });
+});
 
+describe('getReturnCodeFromExit', () => {
   it('should return 999 for SIGKILL', () => {
     expect(getReturnCodeFromExit(null, 'SIGKILL')).toBe(999);
   });
@@ -60,19 +62,6 @@ describe('getReturnCodeFromExit', () => {
 // ─── padStringTo256Bits ───────────────────────────────────────────────────────
 
 describe('padStringTo256Bits', () => {
-  function padStringTo256Bits(inputString) {
-    const blockSize = 32;
-    const buf = Buffer.from(inputString, 'utf8');
-
-    if (buf.length >= blockSize) {
-      return crypto.createHash('sha256').update(buf).digest();
-    }
-
-    const paddingLength = blockSize - buf.length;
-    const padding = Buffer.alloc(paddingLength, paddingLength);
-    return Buffer.concat([buf, padding]);
-  }
-
   it('should produce a 32-byte output for short strings', () => {
     const result = padStringTo256Bits('hello');
     expect(result).toHaveLength(32);

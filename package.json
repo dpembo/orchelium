@@ -71,5 +71,8 @@
         "ejs-lint": "^2.0.0",
         "jest": "^30.5.2",
         "reconnecting-websocket": "^4.4.0"
+    },
+    "overrides": {
+        "dompurify": "3.4.17"
     }
 }
