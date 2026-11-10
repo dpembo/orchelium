@@ -1,5 +1,8 @@
 # Logs
 logs
+
+# Bundled agent. Rebuild with: cd agent && npm run build
+agent/agent.js
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -154,3 +157,4 @@ update-public-repo.sh
 vs-code-workspace.code-workspace
 ca.pem
 newBackupHubEnv.sh
+new_orchelium_dev_env.sh
