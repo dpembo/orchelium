@@ -1,8 +1,10 @@
+const crypto = require('crypto');
 const WebSocket = require('ws');
 const url = require('url');
 
 var messProcessor = require('../agentMessageProcessor.js');
 const notifier = require('../notify.js');
+const agentAuth = require('./agentAuth');
 
 // Configuration. Command and status topic names come from shared/protocol
 // and are chosen by the caller (agentCommunication) when it publishes.
@@ -11,7 +13,34 @@ const PORT = serverConfig.websocket_server.port;
 // State management
 const wsClients = new Map(); // connectionId -> WebSocket
 const agentToConnection = new Map(); // agentId -> connectionId
+const pendingConnections = new Map(); // agentId -> connectionId
 const agentStatus = new Map(); // agentId -> { disconnectTime, timer }
+
+function socketIsOpen(socket) {
+    return Boolean(socket && socket.readyState === WebSocket.OPEN);
+}
+
+function openConnectionFor(map, agentId) {
+    const connectionId = map.get(agentId);
+    if (!connectionId) return false;
+    return socketIsOpen(wsClients.get(connectionId));
+}
+
+function rejectSocket(ws, code, reason) {
+    ws.on('error', () => {});
+    try {
+        ws.close(code, reason);
+    } catch (err) {
+        logger.warn(`Failed to close rejected agent socket: ${err.message}`);
+    }
+}
+
+function authorizationToken(request) {
+    const header = request.headers && (request.headers.authorization || request.headers.Authorization);
+    if (!header) return '';
+    const match = String(header).match(/^Bearer\s+(.+)$/i);
+    return match ? match[1].trim() : '';
+}
 
 // Notification functions
 async function sendNotification(agentId, error) {
@@ -42,29 +71,68 @@ async function init() {
     logger.info("WebSocket Server Initializing");
     server.on('connection', async (ws, request) => {
         const queryParams = url.parse(request.url, true).query;
-        const connectionId = queryParams.name || 'anonymous';
-        const agentId = connectionId.split('~')[0];
+        const claimedName = queryParams.name || '';
+        const agentId = claimedName.split('~')[0];
+
+        if (!agentId || agentId === 'anonymous') {
+            logger.warn('Rejected WebSocket connection with no agent name');
+            rejectSocket(ws, 4001, 'agent name required');
+            return;
+        }
+
+        const token = authorizationToken(request);
+        const tokenValid = agentAuth.presentedTokenMatches(agentId, token);
+        const knownAgent = agents.getAgent(agentId);
+        const decision = agentAuth.decideConnection({
+            agentStatus: knownAgent ? knownAgent.status : null,
+            hasCredential: agentAuth.hasCredential(agentId),
+            tokenValid,
+            liveSocket: openConnectionFor(agentToConnection, agentId),
+            pendingSocket: openConnectionFor(pendingConnections, agentId),
+        });
+
+        if (decision === 'reject') {
+            logger.warn(`Rejected WebSocket connection for agent [${agentId}]`);
+            rejectSocket(ws, 4001, 'unauthorized');
+            return;
+        }
+
+        const connectionId = `${agentId}~${crypto.randomBytes(4).toString('hex')}`;
+        const approved = decision === 'approve-replace' || decision === 'legacy-accept';
 
         // Capture agent's remote address for server restart notifications
         const remoteAddress = request.socket.remoteAddress || request.connection.remoteAddress || 'unknown';
         const agentHost = remoteAddress.includes('::ffff:') ? remoteAddress.substring(7) : remoteAddress;
-        
-        // Handle existing connection for this agent
-        if (agentToConnection.has(agentId)) {
+
+        if (approved && agentToConnection.has(agentId)) {
             const oldConnectionId = agentToConnection.get(agentId);
             const oldClient = wsClients.get(oldConnectionId);
-            if (oldClient) {
-                oldClient.close();
+            if (oldClient && oldClient !== ws) {
+                try { oldClient.close(); } catch (err) { logger.warn(`Error closing previous socket for ${agentId}`); }
                 wsClients.delete(oldConnectionId);
             }
         }
 
-        // Add new connection
-        wsClients.set(connectionId, ws);
-        agentToConnection.set(agentId, connectionId);
+        if (approved && pendingConnections.has(agentId)) {
+            const oldPendingId = pendingConnections.get(agentId);
+            const oldPending = wsClients.get(oldPendingId);
+            if (oldPending && oldPending !== ws) {
+                try { oldPending.close(); } catch (err) { logger.warn(`Error closing pending socket for ${agentId}`); }
+                wsClients.delete(oldPendingId);
+            }
+            pendingConnections.delete(agentId);
+        }
 
-        // Handle reconnection logic
-        if (agentStatus.has(agentId)) {
+        // Add new connection. Pending sockets are not command targets and
+        // must not mark the agent online or replace an approved socket.
+        wsClients.set(connectionId, ws);
+        if (approved) {
+            agentToConnection.set(agentId, connectionId);
+        } else {
+            pendingConnections.set(agentId, connectionId);
+        }
+
+        if (approved && agentStatus.has(agentId)) {
             const status = agentStatus.get(agentId);
             
 
@@ -88,19 +156,21 @@ async function init() {
             }
         }
 
-        // Update status and store agent address
-        agentStatus.set(agentId, { disconnectTime: null, timer: null });
-        agents.updateAgentStatus(agentId, "online", "", null, null, null, "");
-        agents.updateAgentAddress(agentId, agentHost);
-        logger.info(`New client connected Agent: ${agentId}, connection ${connectionId}, host: ${agentHost}, Total clients: ${wsClients.size}`);
+        if (approved) {
+            agentStatus.set(agentId, { disconnectTime: null, timer: null });
+            agents.updateAgentStatus(agentId, "online", "", null, null, null, "");
+            agents.updateAgentAddress(agentId, agentHost);
+            logger.info(`New client connected Agent: ${agentId}, connection ${connectionId}, host: ${agentHost}, Total clients: ${wsClients.size}`);
+        } else {
+            if (agents.getAgent(agentId)) agents.updateAgentAddress(agentId, agentHost);
+            logger.info(`Pending agent [${agentId}] connected from ${agentHost}, connection ${connectionId}`);
+        }
 
         ws.on('message', (message) => {
             try {
                 const parsedMessage = JSON.parse(message);
-                const agentId = parsedMessage.name;
-                const receivedConnectionId = parsedMessage.connectionId;
-                logger.debug(`Received message from Agent: ${agentId} on connection: ${connectionId} from: ${receivedConnectionId} Message: ${message}`);
-                messProcessor.processMessage(parsedMessage.topic, message, "websocket");
+                logger.debug(`Received message from Agent: ${agentId} on connection: ${connectionId}`);
+                messProcessor.processMessage(parsedMessage.topic, message, "websocket", agentId);
             } catch (err) {
                 logger.error('Failed to parse message:', err);
             }
@@ -108,10 +178,15 @@ async function init() {
 
         ws.on('close', async () => {
             logger.warn(`WebSocket Client disconnected - removing [${connectionId}]`);
+            const wasApproved = agentToConnection.get(agentId) === connectionId;
             wsClients.delete(connectionId);
-            if (agentToConnection.get(agentId) === connectionId) {
+            if (wasApproved) {
                 agentToConnection.delete(agentId);
             }
+            if (pendingConnections.get(agentId) === connectionId) {
+                pendingConnections.delete(agentId);
+            }
+            if (!wasApproved) return;
 
             const disconnectTime = Date.now();
             const timer = setTimeout(async () => {
@@ -126,11 +201,16 @@ async function init() {
         });
 
         ws.on('error', async (error) => {
+            const wasApproved = agentToConnection.get(agentId) === connectionId;
             wsClients.delete(connectionId);
-            if (agentToConnection.get(agentId) === connectionId) {
+            if (wasApproved) {
                 agentToConnection.delete(agentId);
             }
+            if (pendingConnections.get(agentId) === connectionId) {
+                pendingConnections.delete(agentId);
+            }
             logger.error(`WebSocket error - removing [${connectionId}] :`, error);
+            if (!wasApproved) return;
 
             const disconnectTime = Date.now();
             const timer = setTimeout(async () => {
@@ -180,6 +260,21 @@ function publishMessage(agentId, topic, message) {
     }
 }
 
+function hasOpenConnection(agentId) {
+    return openConnectionFor(agentToConnection, agentId);
+}
+
+function sendDirect(agentId, payload) {
+    const connectionId = agentToConnection.get(agentId) || pendingConnections.get(agentId);
+    const client = connectionId ? wsClients.get(connectionId) : null;
+    if (!client || !socketIsOpen(client)) {
+        return false;
+    }
+    client.send(payload);
+    logger.info(`Sent direct command to agent [${agentId}]`);
+    return true;
+}
+
 function publishPing(agentId) {
     const connectionId = agentToConnection.get(agentId);
     if (connectionId) {
@@ -203,4 +298,4 @@ function handleLogMessage(message) {
     logger.debug(`Log message from client: ${JSON.stringify(message)}`);
 }
 
-module.exports = { init, sendCommand, publishMessage, publishPing };
+module.exports = { init, sendCommand, publishMessage, publishPing, hasOpenConnection, sendDirect, forceCloseRemove };

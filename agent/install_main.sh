@@ -319,6 +319,20 @@ case $CHOICE in
             MQTT_PORT="1883"
         fi
     fi
+
+    if [ -z "$MQTT_USERNAME" ]; then
+        dialog --inputbox "Enter MQTT Username (leave empty if the broker does not require a login):" 10 70 2> mqtt_user.txt
+        clear
+        MQTT_USERNAME=$(cat mqtt_user.txt)
+        rm -f mqtt_user.txt
+    fi
+
+    if [ -n "$MQTT_USERNAME" ] && [ -z "$MQTT_PASSWORD" ]; then
+        dialog --inputbox "Enter MQTT Password:" 10 60 2> mqtt_pass.txt
+        clear
+        MQTT_PASSWORD=$(cat mqtt_pass.txt)
+        rm -f mqtt_pass.txt
+    fi
     ;;
 
   2)
@@ -383,6 +397,10 @@ echo "MQTT_ENABLED=\"$MQTT_ENABLED\"" >> "$SETTINGS_FILE"
 if [ "$MQTT_ENABLED" = "true" ]; then
     echo "MQTT_SERVER=\"$MQTT_SERVER\"" >> "$SETTINGS_FILE"
     echo "MQTT_PORT=\"$MQTT_PORT\"" >> "$SETTINGS_FILE"
+    if [ -n "$MQTT_USERNAME" ]; then
+        echo "MQTT_USERNAME=\"$MQTT_USERNAME\"" >> "$SETTINGS_FILE"
+        echo "MQTT_PASSWORD=\"$MQTT_PASSWORD\"" >> "$SETTINGS_FILE"
+    fi
 fi
 echo "ORCHELIUM_SERVER=\"$ORCHELIUM_SERVER\"" >> "$SETTINGS_FILE"
 echo "ORCHELIUIM_PORT=\"$ORCHELIUIM_PORT\"" >> "$SETTINGS_FILE"
@@ -394,6 +412,9 @@ echo "WORKING_DIR=\"$WORKING_DIR\"" >> "$SETTINGS_FILE"
 echo "STARTUP_TYPE=\"$STARTUP_TYPE\"" >> "$SETTINGS_FILE"
 echo "INSTALL_DIR=\"$INSTALL_DIR\"" >> "$SETTINGS_FILE"
 echo "NODE_COMMAND=\"$NODE_COMMAND\"" >> "$SETTINGS_FILE"
+if [ -n "$AGENT_TOKEN" ]; then
+    echo "AGENT_TOKEN=\"$AGENT_TOKEN\"" >> "$SETTINGS_FILE"
+fi
 echo "CONNECTION_RETRIES=\"360\"" >> "$SETTINGS_FILE"
 echo "CONNECTION_DELAY=\"30000\"" >> "$SETTINGS_FILE"
 echo "CONNECTION_TIMEOUT=\"5000\"" >> "$SETTINGS_FILE"

@@ -53,6 +53,7 @@ function printConfiguration() {
     console.log(`${colors.brightYellow}    🔹 Mode:${colors.reset}                ${colors.yellow}MQTT${colors.reset}`);
     console.log(`${colors.brightYellow}    🔹 Server:${colors.reset}              ${colors.yellow}${runtime.MQTT_SERVER}${colors.reset}`);
     console.log(`${colors.brightYellow}    🔹 Port:${colors.reset}                ${colors.yellow}${runtime.MQTT_SERVER_PORT}${colors.reset}`);
+    console.log(`${colors.brightYellow}    🔹 Username:${colors.reset}            ${colors.yellow}${runtime.MQTT_USERNAME ? runtime.MQTT_USERNAME : 'none'}${colors.reset}`);
   } else {
     console.log(`${colors.brightYellow}    🔹 Mode:${colors.reset}                ${colors.yellow}WebSocket${colors.reset}`);
     console.log(`${colors.brightYellow}    🔹 Server:${colors.reset}              ${colors.yellow}${runtime.WS_SERVER}${colors.reset}`);
@@ -60,6 +61,7 @@ function printConfiguration() {
   }
   console.log(`${colors.brightYellow}    🔹 Webserver Port:${colors.reset}      ${colors.yellow}${runtime.PORT}${colors.reset}`);
   console.log(`${colors.brightYellow}    🔹 Connection Timeout:${colors.reset}  ${colors.yellow}${runtime.RETRY_TIMEOUT / 1000} secs${colors.reset}`);
+  console.log(`${colors.brightYellow}    🔹 Connection token:${colors.reset}    ${colors.yellow}${runtime.AGENT_TOKEN ? 'configured' : 'not set'}${colors.reset}`);
 
   console.log(`\n${colors.brightYellow}  🌍 Environment${colors.reset}`);
   console.log(`${divider}`);

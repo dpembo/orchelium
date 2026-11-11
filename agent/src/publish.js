@@ -1,4 +1,4 @@
-const { TOPICS, buildStatusMessage, buildLogMessage } = require('../../shared/protocol');
+const { TOPICS, AGENT_CAPABILITIES, buildStatusMessage, buildLogMessage } = require('../../shared/protocol');
 const runtime = require('./runtime');
 const { debug, DEBUG_LEVEL } = require('./log');
 
@@ -14,6 +14,8 @@ function publishStatusUpdate(status, description, data, jobName, callback, isMan
     jobName,
     executionId,
     executionContext,
+    agentToken: runtime.AGENT_TOKEN || null,
+    capabilities: [AGENT_CAPABILITIES.TOKEN],
   });
 
   runtime.pubCount++;
@@ -73,6 +75,8 @@ function publishLogData(logData, jobName, eta, returnCode, callback, manual, exe
     data: logData,
     executionId,
     executionContext,
+    agentToken: runtime.AGENT_TOKEN || null,
+    capabilities: [AGENT_CAPABILITIES.TOKEN],
   });
 
   runtime.pubCount++;

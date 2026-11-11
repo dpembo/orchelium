@@ -49,6 +49,8 @@ if (process.argv.includes('--debug')) {
 if (runtime.useMQTT) {
   runtime.mqttClient = new MqttHandler(runtime.MQTT_SERVER, runtime.MQTT_SERVER_PORT, {
     connectionTimeout: runtime.RETRY_TIMEOUT,
+    username: runtime.MQTT_USERNAME,
+    password: runtime.MQTT_PASSWORD,
   });
   runtime.mqttClient.connect().then(() => {
     runtime.mqttClient.subscribe(TOPICS.command, handleCommand);

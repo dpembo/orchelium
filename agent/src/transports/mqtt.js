@@ -12,6 +12,8 @@ class MqttHandler {
     this.isReconnecting = false;
     this.isConnecting = false;
     this.connectionTimeout = options.connectionTimeout || 5000;
+    this.username = options.username || '';
+    this.password = options.password || '';
     this.connectionTimeoutHandler = null;
     this.retryManager = new RetryBackoffManager(this.server, 'MQTT');
   }
@@ -31,7 +33,14 @@ class MqttHandler {
     this.isConnecting = true;
     return new Promise((resolve, reject) => {
       const connectUrl = `mqtt://${this.server}:${this.port}`;
-      this.client = mqtt.connect(connectUrl);
+      const clientOptions = {};
+      if (this.username) {
+        clientOptions.username = this.username;
+        clientOptions.password = this.password;
+      }
+      this.client = Object.keys(clientOptions).length
+        ? mqtt.connect(connectUrl, clientOptions)
+        : mqtt.connect(connectUrl);
       this.connectionTimeoutHandler = setTimeout(() => {
         if (!this.isConnected) {
           this.client.end();

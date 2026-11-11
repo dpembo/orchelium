@@ -11,6 +11,9 @@ const agentNameFromArgv = agentNameIndex !== -1 ? process.argv[agentNameIndex + 
 const workingDirIndex = process.argv.indexOf('--workingDir');
 const mqttServerIndex = process.argv.indexOf('--mqttServer');
 const mqttPortIndex = process.argv.indexOf('--mqttPort');
+const mqttUsernameIndex = process.argv.indexOf('--mqttUsername');
+const mqttPasswordIndex = process.argv.indexOf('--mqttPassword');
+const agentTokenIndex = process.argv.indexOf('--agentToken');
 const wsServerIndex = process.argv.indexOf('--wsServer');
 const wsPortIndex = process.argv.indexOf('--wsPort');
 const retryTimeoutIndex = process.argv.indexOf('--retryTimeout');
@@ -28,6 +31,9 @@ const runtime = {
   workingDirIndex,
   mqttServerIndex,
   mqttPortIndex,
+  mqttUsernameIndex,
+  mqttPasswordIndex,
+  agentTokenIndex,
   wsServerIndex,
   wsPortIndex,
   retryTimeoutIndex,
@@ -58,6 +64,9 @@ const runtime = {
   workingDir: workingDirIndex !== -1 ? process.argv[workingDirIndex + 1] : '/tmp',
   MQTT_SERVER: mqttServerIndex !== -1 ? process.argv[mqttServerIndex + 1] : DEFAULT_MQTT_SERVER,
   MQTT_SERVER_PORT: mqttPortIndex !== -1 ? process.argv[mqttPortIndex + 1] : DEFAULT_MQTT_SERVER_PORT,
+  MQTT_USERNAME: mqttUsernameIndex !== -1 ? process.argv[mqttUsernameIndex + 1] : '',
+  MQTT_PASSWORD: mqttPasswordIndex !== -1 ? process.argv[mqttPasswordIndex + 1] : '',
+  AGENT_TOKEN: agentTokenIndex !== -1 ? process.argv[agentTokenIndex + 1] : '',
   MQTT_ENABLED: process.argv.includes('--mqttServer'),
   WS_SERVER: wsServerIndex !== -1 ? process.argv[wsServerIndex + 1] : DEFAULT_WS_SERVER,
   WS_SERVER_PORT: wsPortIndex !== -1 ? process.argv[wsPortIndex + 1] : DEFAULT_WS_SERVER_PORT,

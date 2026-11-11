@@ -449,5 +449,59 @@ describe('Agent Message Processor - Notification Logic', () => {
         })
       );
     });
+
+    it('should reject a message when the agent token does not match', async () => {
+      const agentAuth = require('../../communications/agentAuth');
+      const token = agentAuth.issue('secured-agent');
+      agentsModule.getAgent.mockReturnValue({ name: 'secured-agent', status: 'online' });
+
+      try {
+        await agentMessageProcessor.processMessage('orchelium/agent/status', JSON.stringify({
+          name: 'secured-agent',
+          status: 'pong',
+          agentToken: 'wrong-token',
+          data: '{}',
+        }), 'mqtt');
+
+        expect(agentsModule.updateAgentStatus).not.toHaveBeenCalled();
+        expect(token).not.toBe('wrong-token');
+      } finally {
+        agentAuth.forget('secured-agent');
+      }
+    });
+
+    it('should accept a message with the issued token and not keep the token in the stored payload', async () => {
+      const agentAuth = require('../../communications/agentAuth');
+      const token = agentAuth.issue('secured-agent');
+      agentsModule.getAgent.mockReturnValue({ name: 'secured-agent', status: 'online' });
+      running.getRunningCountForAgent.mockReturnValue(0);
+
+      try {
+        await agentMessageProcessor.processMessage('orchelium/agent/status', JSON.stringify({
+          name: 'secured-agent',
+          status: 'pong',
+          agentToken: token,
+          data: '{}',
+        }), 'websocket', 'secured-agent');
+
+        expect(agentsModule.updateAgentStatus).toHaveBeenCalled();
+        const storedMessage = agentsModule.updateAgentStatus.mock.calls[0][6];
+        expect(storedMessage).not.toContain(token);
+      } finally {
+        agentAuth.forget('secured-agent');
+      }
+    });
+
+    it('should reject a message whose name does not match the socket', async () => {
+      agentsModule.getAgent.mockReturnValue({ name: 'other-agent', status: 'online' });
+
+      await agentMessageProcessor.processMessage('orchelium/agent/status', JSON.stringify({
+        name: 'other-agent',
+        status: 'pong',
+        data: '{}',
+      }), 'websocket', 'real-agent');
+
+      expect(agentsModule.updateAgentStatus).not.toHaveBeenCalled();
+    });
   });
 });

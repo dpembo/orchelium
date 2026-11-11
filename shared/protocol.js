@@ -13,6 +13,12 @@ const COMMANDS = Object.freeze({
   PING: 'ping',
   QUERY_METRIC: 'queryMetric',
   TERMINATE_EXECUTION: 'terminateExecution',
+  ENROLL: 'enroll',
+  ROTATE_TOKEN: 'rotateToken',
+});
+
+const AGENT_CAPABILITIES = Object.freeze({
+  TOKEN: 'agent-token',
 });
 
 const STATUS = Object.freeze({
@@ -77,6 +83,8 @@ function buildStatusMessage({
   executionId = null,
   executionContext = null,
   reportedAt = new Date(),
+  agentToken = null,
+  capabilities = null,
 }) {
   const message = {
     name,
@@ -91,6 +99,8 @@ function buildStatusMessage({
     executionId,
     lastStatusReport: reportedAt.toISOString(),
   };
+  if (agentToken) message.agentToken = agentToken;
+  if (capabilities && capabilities.length) message.capabilities = capabilities;
   return applyExecutionContext(message, executionContext);
 }
 
@@ -105,6 +115,8 @@ function buildLogMessage({
   executionId = null,
   executionContext = null,
   reportedAt = new Date(),
+  agentToken = null,
+  capabilities = null,
 }) {
   const message = {
     name,
@@ -118,6 +130,8 @@ function buildLogMessage({
     executionId,
     lastStatusReport: reportedAt.toISOString(),
   };
+  if (agentToken) message.agentToken = agentToken;
+  if (capabilities && capabilities.length) message.capabilities = capabilities;
   return applyExecutionContext(message, executionContext);
 }
 
@@ -137,6 +151,7 @@ function returnCodeFromExit(code, signal) {
 module.exports = {
   TOPICS,
   COMMANDS,
+  AGENT_CAPABILITIES,
   STATUS,
   EXIT_CODES,
   EXECUTION_CONTEXT_FIELDS,

@@ -133,11 +133,22 @@ function hasValidAgents(obj) {
     const serverPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
     const mqttEnabled = "<%=MQTT_ENABLED%>";
     const wsEnabled = "<%=WS_ENABLED%>";
+    const mqttUsername = <%- JSON.stringify(typeof MQTT_USERNAME !== 'undefined' ? MQTT_USERNAME : '').replace(/</g, '\\u003c') %>;
+    const mqttPassword = <%- JSON.stringify(typeof MQTT_PASSWORD !== 'undefined' ? MQTT_PASSWORD : '').replace(/</g, '\\u003c') %>;
+
+    function shellArg(flag, value) {
+      if (!value) return '';
+      return ' ' + flag + "='" + String(value).replace(/'/g, `'\\''`) + "'";
+    }
 
     var wsParams = "";
     var mqttParams = "";
     if(wsEnabled.toUpperCase()=="TRUE")wsParams+=" --wsServer=<%=WS_SERVER%> --wsPort=<%=WS_PORT%>";
-    if(mqttEnabled.toUpperCase()=="TRUE")mqttParams+=" --mqttServer=<%=MQTT_SERVER%> --mqttPort=<%=MQTT_SERVER_PORT%>";
+    if(mqttEnabled.toUpperCase()=="TRUE"){
+      mqttParams+=" --mqttServer=<%=MQTT_SERVER%> --mqttPort=<%=MQTT_SERVER_PORT%>";
+      mqttParams += shellArg('--mqttUsername', mqttUsername);
+      mqttParams += shellArg('--mqttPassword', mqttPassword);
+    }
 
     document.getElementById('installcommand').innerText="wget -qO- " + serverProtocol + "//" + serverDomain + ":" + serverPort + "/agent/install.sh | bash -s -- --orcheliumUrl=" + serverProtocol + "//" + serverDomain + ":" + serverPort + " --installDir=/opt/OrcheliumAgent" + mqttParams + wsParams ;
     $('#confirmationModal').modal('open');
@@ -559,7 +570,10 @@ function hasValidAgents(obj) {
     </div>
   </div>
   <div class="section no-pad-bot" id="index-banner">
-    <div class="container">
+  <div class="container">
+    <% if (typeof tokenNotice !== 'undefined' && tokenNotice) { %>
+      <div class="card-panel orange lighten-4"><%= tokenNotice %></div>
+    <% } %>
       <% if(hasValidAgents(agents)){%>
       <h5 class="header orange-text">Agent Status<% if (hasPerm('agents.create')) { %><span style="float:right"><a href="#" onclick="javascript:addAgent()"><span title="Deploy New Agent" class="material-icons vertMid tableIconButton" style="font-size:24pt;">add_circle</span></a></span><% } %></h5>
       
@@ -690,6 +704,9 @@ function hasValidAgents(obj) {
 
             <% if(agentVersInt < serverVersInt){%>
               <a title="Agent Version Outdated.&#10;&#10;Agent Version is: <%=agentVersion%>&#10;Minimum Version Supported is: <%=serverVers%>" href="/agentHistory.html?name=<%=value.name%>"><span style="color:#CF6679ed;font-size:14pt;position: relative;left: -15px;top: -6px;z-index: 50;" class="material-icons tableIconButton blinking">warning</span></a>
+            <% } %>
+            <% if (value.status !== 'register' && !(typeof tokenAgents !== 'undefined' && tokenAgents[value.name])) { %>
+              <a title="No connection token.&#10;&#10;Until a token is issued, another client can claim this agent when it is disconnected." href="<%= hasPerm('agents.edit') ? '/agentEdit.html?agentId=' + encodeURIComponent(value.name) : '/agentHistory.html?name=' + encodeURIComponent(value.name) %>"><span style="color:#CF6679ed;font-size:14pt;position: relative;left: <%= agentVersInt < serverVersInt ? '-34px' : '-15px' %>;top: -6px;z-index: 50;" class="material-icons tableIconButton blinking">warning</span></a>
             <% } %>
 
             <%/* status[agentId].status */ %>

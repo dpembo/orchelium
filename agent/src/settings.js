@@ -20,6 +20,9 @@ function parseSettingsFile(filePath) {
             break;
           case 'MQTT_SERVER': if (runtime.mqttServerIndex === -1) runtime.MQTT_SERVER = value; break;
           case 'MQTT_PORT': if (runtime.mqttPortIndex === -1) runtime.MQTT_SERVER_PORT = value; break;
+          case 'MQTT_USERNAME': if (runtime.mqttUsernameIndex === -1) runtime.MQTT_USERNAME = value; break;
+          case 'MQTT_PASSWORD': if (runtime.mqttPasswordIndex === -1) runtime.MQTT_PASSWORD = value; break;
+          case 'AGENT_TOKEN': if (runtime.agentTokenIndex === -1) runtime.AGENT_TOKEN = value; break;
           case 'MQTT_ENABLED': if (!process.argv.includes('--mqttServer')) runtime.MQTT_ENABLED = value.toUpperCase() === 'TRUE'; break;
           case 'WS_SERVER': if (runtime.wsServerIndex === -1) runtime.WS_SERVER = value; break;
           case 'WS_PORT': if (runtime.wsPortIndex === -1) runtime.WS_SERVER_PORT = value; break;
@@ -42,4 +45,24 @@ function parseSettingsFile(filePath) {
   }
 }
 
-module.exports = { parseSettingsFile };
+function writeSetting(key, value) {
+  const filePath = 'settings.sh';
+  const safeValue = String(value).replace(/"/g, '');
+  let data = '';
+  try {
+    data = fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    data = '';
+  }
+  const line = `${key}="${safeValue}"`;
+  const pattern = new RegExp(`^${key}=".*"$`, 'm');
+  if (pattern.test(data)) {
+    data = data.replace(pattern, line);
+  } else {
+    data = `${data.replace(/\s*$/, '')}\n${line}\n`;
+  }
+  fs.writeFileSync(filePath, data, { encoding: 'utf8', mode: 0o600 });
+  if (key === 'AGENT_TOKEN') runtime.AGENT_TOKEN = safeValue;
+}
+
+module.exports = { parseSettingsFile, writeSetting };

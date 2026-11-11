@@ -1,5 +1,6 @@
 const { TOPICS } = require('./shared/protocol');
 const status_topic = TOPICS.status;
+const agentAuth = require('./communications/agentAuth');
 const EventEmitter = require('events');
 const metricResultEmitter = new EventEmitter();
 let staleReconcileCount = 0;
@@ -29,10 +30,48 @@ function waitForMetricResult(jobName, timeoutMs = 30000) {
   });
 }
 
-async function processMessage(topic, message,protocol) {
+async function processMessage(topic, message, protocol, socketAgentId) {
+    let obj;
+    try {
+      obj = JSON.parse(message);
+    } catch (err) {
+      logger.error('Failed to parse agent message:', err);
+      return;
+    }
+
+    const presentedToken = obj.agentToken;
+    if (Object.prototype.hasOwnProperty.call(obj, 'agentToken')) {
+      delete obj.agentToken;
+      message = JSON.stringify(obj);
+    }
+
+    const decision = agentAuth.authorizeMessage(obj.name, presentedToken);
+    if (!decision.ok) {
+      logger.warn(`Rejected ${protocol} message from [${obj.name}]: ${decision.reason}`);
+      return;
+    }
+
+    if (socketAgentId && obj.name !== socketAgentId) {
+      logger.warn(`Rejected ${protocol} message claiming [${obj.name}] on socket [${socketAgentId}]`);
+      return;
+    }
+
+    if (Array.isArray(obj.capabilities)) {
+      const capabilityAgent = agents.getAgent(obj.name);
+      if (capabilityAgent) capabilityAgent.capabilities = obj.capabilities;
+    }
+
     logger.debug(`Received message on Protocol: '${protocol}' with topic '${topic}': ${message.toString()}`);
-    var obj = JSON.parse(message);
     var agentKnown = agents.getAgent(obj.name);
+    const awaitingApproval = !agentKnown || agentKnown.status === 'register';
+    if (awaitingApproval && obj.status !== 'register') {
+      logger.warn(`Ignoring [${obj.status}] from unapproved agent [${obj.name}]`);
+      return;
+    }
+    if (obj.status === 'token_ack') {
+      logger.info(`Agent [${obj.name}] confirmed its connection token`);
+      return;
+    }
     debugMessage(topic, obj, message, agentKnown);
   
     if(agentKnown){

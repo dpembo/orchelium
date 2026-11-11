@@ -11,7 +11,13 @@ const { debug, DEBUG_LEVEL } = require('../log');
 // exits instead of retrying. This wrapper keeps one listener for the life of
 // the socket. reconnecting-websocket checks CLOSING === 2 on the constructor.
 function SafeWebSocket(url, protocols) {
-  const socket = protocols === undefined ? new websocket(url) : new websocket(url, protocols);
+  const options = {};
+  if (runtime.AGENT_TOKEN) {
+    options.headers = { Authorization: `Bearer ${runtime.AGENT_TOKEN}` };
+  }
+  const socket = protocols === undefined
+    ? new websocket(url, options)
+    : new websocket(url, protocols, options);
   socket.on('error', (err) => {
     debug(DEBUG_LEVEL.TRACE, `WebSocket socket error: ${err && err.message ? err.message : err}`);
   });
@@ -110,7 +116,7 @@ class WebSocketHandler {
         if (generation !== this.connectionGeneration) return;
         this.lastActivityTime = Date.now();
         const message = `"${event.data}"`;
-        debug(DEBUG_LEVEL.TRACE, `Received message on [${connId}]: ${message}`);
+        debug(DEBUG_LEVEL.TRACE, `Received message on [${connId}]`);
         this.processMessageCallback(message);
       });
 
@@ -182,6 +188,19 @@ class WebSocketHandler {
           // Reconnect will be triggered again by close/error events
         });
     }, retryDelay);
+  }
+
+  reconnectNow() {
+    this.connectionGeneration += 1;
+    const old = this.client;
+    this.isConnected = false;
+    this.isConnecting = false;
+    this.isReconnecting = false;
+    this.client = null;
+    if (old) {
+      try { old.close(); } catch (e) { /* already closed */ }
+    }
+    return this.connect();
   }
 
   sendMessage(message) {

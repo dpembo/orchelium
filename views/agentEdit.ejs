@@ -48,6 +48,29 @@
       });
   }
 
+  function toggleConnectionToken(button) {
+    var input = document.getElementById('connectionToken');
+    if (!input || !input.dataset.token) {
+      return;
+    }
+    var revealed = input.getAttribute('data-revealed') === 'true';
+    if (revealed) {
+      input.type = 'password';
+      input.value = '••••••••';
+      input.setAttribute('data-revealed', 'false');
+      button.title = 'Show connection token';
+    } else {
+      input.type = 'text';
+      input.value = input.dataset.token;
+      input.setAttribute('data-revealed', 'true');
+      button.title = 'Hide connection token';
+    }
+  }
+
+  function confirmRotateToken() {
+    return confirm('Rotate this agent connection token? The current token keeps working until the agent confirms the new one.');
+  }
+
     
     
   
@@ -90,6 +113,39 @@
           color: #cccccc;
         }
 
+        .connection-token-field {
+          position: relative;
+        }
+
+        #connectionToken {
+          padding-right: 84px;
+          box-sizing: border-box;
+        }
+
+        .connection-token-actions {
+          position: absolute;
+          right: 0.75rem;
+          top: 0.15rem;
+          display: flex;
+        }
+
+        .connection-token-actions button {
+          background: transparent;
+          border: 0;
+          color: #63ade9;
+          cursor: pointer;
+          height: 36px;
+          padding: 4px 6px;
+        }
+
+        .connection-token-actions button:hover {
+          color: #2049b9;
+        }
+
+        .connection-token-note {
+          margin-top: -12px;
+          margin-bottom: 16px;
+        }
       
     </style>
 </head>
@@ -135,6 +191,45 @@
               <label for="concurrency" class="active">Max Concurrent Jobs</label>
             </div>
           </div>
+
+          <% if (agent.status !== 'register') { %>
+          <div class="row">
+            <div class="input-field col s12 connection-token-field">
+              <% var tokenVisible = typeof shownToken !== 'undefined' && shownToken && shownToken.token; %>
+              <input id="connectionToken" type="<%= tokenVisible ? 'text' : 'password' %>" readonly autocomplete="off" spellcheck="false"
+                value="<%= tokenVisible ? shownToken.token : (hasCredential ? '••••••••' : '') %>"
+                <% if (tokenVisible) { %>data-token="<%= shownToken.token %>" data-revealed="true"<% } %>>
+              <label for="connectionToken" class="active">Connection token</label>
+              <span class="connection-token-actions">
+                <% if (hasCredential && tokenVisible) { %>
+                <button type="button" title="Hide connection token" onclick="toggleConnectionToken(this)" aria-label="Hide connection token">
+                  <svg xmlns="http://www.w3.org/2000/svg" height="22" viewBox="0 0 24 24" width="22" fill="currentColor" aria-hidden="true"><path d="M6.5 3C4 3 2 5 2 7.5V16c0 2.5 2 4.5 4.5 4.5S11 18.5 11 16V7.5C11 5 9 3 6.5 3zm0 2C7.9 5 9 6.1 9 7.5V16c0 1.4-1.1 2.5-2.5 2.5S4 17.4 4 16V7.5C4 6.1 5.1 5 6.5 5zM17.5 3C15 3 13 5 13 7.5V16c0 2.5 2 4.5 4.5 4.5S22 18.5 22 16V7.5C22 5 20 3 17.5 3zm0 2c1.4 0 2.5 1.1 2.5 2.5V16c0 1.4-1.1 2.5-2.5 2.5S15 17.4 15 16V7.5C15 6.1 16.1 5 17.5 5zM10 10h4v2h-4z"/></svg>
+                </button>
+                <% } else if (hasCredential) { %>
+                <button type="submit" form="revealTokenForm" title="Show connection token" aria-label="Show connection token">
+                  <svg xmlns="http://www.w3.org/2000/svg" height="22" viewBox="0 0 24 24" width="22" fill="currentColor" aria-hidden="true"><path d="M6.5 3C4 3 2 5 2 7.5V16c0 2.5 2 4.5 4.5 4.5S11 18.5 11 16V7.5C11 5 9 3 6.5 3zm0 2C7.9 5 9 6.1 9 7.5V16c0 1.4-1.1 2.5-2.5 2.5S4 17.4 4 16V7.5C4 6.1 5.1 5 6.5 5zM17.5 3C15 3 13 5 13 7.5V16c0 2.5 2 4.5 4.5 4.5S22 18.5 22 16V7.5C22 5 20 3 17.5 3zm0 2c1.4 0 2.5 1.1 2.5 2.5V16c0 1.4-1.1 2.5-2.5 2.5S15 17.4 15 16V7.5C15 6.1 16.1 5 17.5 5zM10 10h4v2h-4z"/></svg>
+                </button>
+                <% } else { %>
+                <button type="submit" form="issueTokenForm" title="Issue connection token" aria-label="Issue connection token">
+                  <i class="material-icons">vpn_key</i>
+                </button>
+                <% } %>
+                <% if (hasCredential) { %>
+                <button type="submit" form="rotateTokenForm" title="Rotate connection token" aria-label="Rotate connection token" onclick="return confirmRotateToken()">
+                  <i class="material-icons">autorenew</i>
+                </button>
+                <% } %>
+              </span>
+            </div>
+          </div>
+          <% if (typeof tokenNotice !== 'undefined' && tokenNotice) { %>
+            <p class="grey-text connection-token-note"><%= tokenNotice %></p>
+          <% } else if (tokenVisible && shownToken.delivered) { %>
+            <p class="grey-text connection-token-note">Sent to the connected agent. Copy it into AGENT_TOKEN if the agent did not store it.</p>
+          <% } else if (tokenVisible && shownToken.rotationPending) { %>
+            <p class="grey-text connection-token-note">A rotation is in progress. This token keeps working until the agent confirms the new one.</p>
+          <% } %>
+          <% } %>
           
           <!--
           <div class="row">
@@ -169,6 +264,23 @@
 
 
         </form>
+        <% if (agent.status !== 'register') { %>
+        <form id="revealTokenForm" method="post" action="/agent-token.html">
+          <input type="hidden" name="_csrf" value="<%= csrf %>">
+          <input type="hidden" name="agentname" value="<%= agent.name %>">
+          <input type="hidden" name="tokenAction" value="reveal">
+        </form>
+        <form id="rotateTokenForm" method="post" action="/agent-token.html">
+          <input type="hidden" name="_csrf" value="<%= csrf %>">
+          <input type="hidden" name="agentname" value="<%= agent.name %>">
+          <input type="hidden" name="tokenAction" value="rotate">
+        </form>
+        <form id="issueTokenForm" method="post" action="/agent-token.html">
+          <input type="hidden" name="_csrf" value="<%= csrf %>">
+          <input type="hidden" name="agentname" value="<%= agent.name %>">
+          <input type="hidden" name="tokenAction" value="issue">
+        </form>
+        <% } %>
       </div>
     </div>      
   </div>

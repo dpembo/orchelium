@@ -94,6 +94,17 @@ function pingAllAgents(agentStatusDict){
     }
 }
 
+function sendEnrollment(agentId, token) {
+    const message = {
+        name: agentId,
+        topic: command_topic,
+        command: 'enroll',
+        commandParams: token,
+    };
+    const jwtToken = passman.createJWTToken(message, 1);
+    return webSocketServer.sendDirect(agentId, jwtToken);
+}
+
 function isTransportProtocolConnected(type,attemptReconnect){
     var connected=true;
     if(type=="mqtt" && serverConfig.mqtt.enabled=="true" && !mqttTransport.isMQTTConnected()){
@@ -107,4 +118,4 @@ function isTransportProtocolConnected(type,attemptReconnect){
     return connected;
 }
 
-module.exports = {pingAgent,pingAllAgents,sendCommand}
+module.exports = {pingAgent,pingAllAgents,sendCommand,sendEnrollment}

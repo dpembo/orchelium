@@ -4,6 +4,8 @@ INSTALL_DIR="/opt/OrcheliumAgent"
 # Default values for variables
 mqttServer=""
 mqttPort=""
+mqttUsername=""
+mqttPassword=""
 wsServer=""
 wsPort=""
 mqttEnabled="false"
@@ -19,6 +21,8 @@ function show_help() {
     echo "  --installDir=<path>      Installation directory (default: /opt/OrcheliumAgent)."
     echo "  --mqttServer=<ip>        IP address of the MQTT server."
     echo "  --mqttPort=<port>        Port of the MQTT server."
+    echo "  --mqttUsername=<user>    Username when the MQTT broker requires a login."
+    echo "  --mqttPassword=<secret>  Password when the MQTT broker requires a login."
     echo "  --wsServer=<ip>          IP address of the WebSocket server."
     echo "  --wsPort=<port>          Port of the WebSocket server."
     echo "  -?, --?, -h, --help      Show this help message."
@@ -41,6 +45,12 @@ do
             ;;
         --mqttPort=*)
             mqttPort="${arg#*=}"
+            ;;
+        --mqttUsername=*)
+            mqttUsername="${arg#*=}"
+            ;;
+        --mqttPassword=*)
+            mqttPassword="${arg#*=}"
             ;;
         --wsServer=*)
             wsServer="${arg#*=}"
@@ -238,6 +248,8 @@ SETTINGS_FILE="settings.sh"
 echo "MQTT_ENABLED=\"$mqttEnabled\"" >> "$SETTINGS_FILE"
 echo "MQTT_SERVER=\"$mqttServer\"" >> "$SETTINGS_FILE"
 echo "MQTT_PORT=\"$mqttPort\"" >> "$SETTINGS_FILE"
+echo "MQTT_USERNAME=\"$mqttUsername\"" >> "$SETTINGS_FILE"
+echo "MQTT_PASSWORD=\"$mqttPassword\"" >> "$SETTINGS_FILE"
 echo "ORCHELIUM_SERVER=\"$hostname\"" >> "$SETTINGS_FILE"
 echo "ORCHELIUIM_PORT=\"$port\"" >> "$SETTINGS_FILE"
 echo "WS_ENABLED=\"$wsEnabled\"" >> "$SETTINGS_FILE"
@@ -251,6 +263,8 @@ echo "Port                   : $port"
 echo "Installation Directory : $INSTALL_DIR"
 echo "MQTT Server            : $mqttServer"
 echo "MQTT Port              : $mqttPort"
+echo "MQTT Username          : ${mqttUsername:-<none>}"
+echo "MQTT Password          : $(if [ -n "$mqttPassword" ]; then echo set; else echo '<none>'; fi)"
 echo "MQTT Enabled           : $mqttEnabled"
 echo "WS Server              : $wsServer"
 echo "WS Port                : $wsPort"

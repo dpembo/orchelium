@@ -210,6 +210,9 @@ else{
     agents = require("./agents.js");
     await agents.init();
     logger.info('Agents initialized successfully');
+    const agentAuth = require('./communications/agentAuth');
+    await agentAuth.init();
+    logger.info('Agent credentials initialized');
   } catch (error) {
     logger.error('Error during initialization:', error.message);
     process.exit(1);
@@ -3649,12 +3652,22 @@ app.get('/agentEdit.html',User.isAuthenticated, User.requirePermission(PERMISSIO
   for (var i = 0; i < scriptsMeta.length; i++) {
     scripts.push(scriptsMeta[i].data.filename);
   }
+  var tokenNotice = request.session.tokenNotice || '';
+  delete request.session.tokenNotice;
+  var shownToken = null;
+  if (request.session.shownAgentToken && request.session.shownAgentToken.name === msg) {
+    shownToken = request.session.shownAgentToken;
+    delete request.session.shownAgentToken;
+  }
   response.render('agentEdit', {
     subject: 'Agent Edit',
     name: 'Control/AgentEdit',
     agent: agentObj,
     scripts: scripts,
     csrf: request.csrfToken(),
+    hasCredential: require('./communications/agentAuth').hasCredential(msg),
+    tokenNotice: tokenNotice,
+    shownToken: shownToken,
   });
 });
 
@@ -3692,6 +3705,14 @@ app.get('/agentstatus.html',User.isAuthenticated, User.requirePermission(PERMISS
 
     
     
+    const tokenNotice = request.session.tokenNotice || '';
+    delete request.session.tokenNotice;
+    const agentAuth = require('./communications/agentAuth');
+    const tokenAgents = {};
+    for (const agentName of Object.keys(agentdict)) {
+      if (agentAuth.hasCredential(agentName)) tokenAgents[agentName] = true;
+    }
+
     response.render('agentstatus', {
     subject: 'EJS template engine',
     name: 'Control/AgentStatus',
@@ -3701,11 +3722,14 @@ app.get('/agentstatus.html',User.isAuthenticated, User.requirePermission(PERMISS
     MQTT_ENABLED: serverConfig.mqtt.enabled,
     MQTT_SERVER_PORT: serverConfig.mqtt.port,
     MQTT_SERVER: serverConfig.mqtt.server,
+    MQTT_USERNAME: serverConfig.mqtt.username || '',
+    MQTT_PASSWORD: serverConfig.mqtt.password || '',
     WS_ENABLED: serverConfig.websocket_server.enabled,
     WS_SERVER: serverConfig.websocket_server.server,
     WS_PORT: serverConfig.websocket_server.port,
-    serverVers: minSupportedVersion
-    //agentHistory:agentHistory,
+    serverVers: minSupportedVersion,
+    tokenNotice: tokenNotice,
+    tokenAgents: tokenAgents,
   });
 });
 
@@ -3728,8 +3752,85 @@ app.post('/agent-submit.html', validateCsrf, User.isAuthenticated, User.requireP
   var imageurl = req.body.imageurl;
 
   agents.registerAgent(name,description,command,imageurl,undefined,description);
+  const agentAuth = require('./communications/agentAuth');
+  const agent = agents.getAgent(name);
+  if (agentAuth.supportsAgentToken(agent)) {
+    try {
+      const token = agentAuth.issue(name);
+      const delivered = agentComms.sendEnrollment(name, token);
+      req.session.shownAgentToken = { name, token, delivered: Boolean(delivered), rotationPending: false };
+      return res.redirect('/agentEdit.html?agentId=' + encodeURIComponent(name));
+    } catch (err) {
+      logger.error(`Failed to issue connection token for [${name}]: ${err.message}`);
+      req.session.tokenNotice = 'The agent was approved, but the connection token could not be created.';
+    }
+  } else {
+    req.session.tokenNotice = 'This agent does not support connection tokens yet. Update it, then issue a token from the agent edit page. Until then a disconnected agent can still be claimed by the first client that connects.';
+  }
   res.redirect("/agentstatus.html");
 
+});
+
+app.post('/agent-token.html', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_EDIT), (req, res) => {
+  const name = req.body.agentname;
+  const action = req.body.tokenAction;
+  const agentAuth = require('./communications/agentAuth');
+  const agent = agents.getAgent(name);
+  if (!agent) {
+    return res.status(404).send('Agent not found');
+  }
+
+  const editUrl = '/agentEdit.html?agentId=' + encodeURIComponent(name);
+  try {
+    if (action === 'rotate') {
+      if (!agentAuth.hasCredential(name)) {
+        req.session.tokenNotice = 'Issue a connection token before rotating it.';
+        return res.redirect(editUrl);
+      }
+      if (!agentAuth.supportsAgentToken(agent)) {
+        req.session.tokenNotice = 'Update the agent before rotating its connection token.';
+        return res.redirect(editUrl);
+      }
+      const reachable = agent.commsType === 'mqtt'
+        ? serverConfig.mqtt.enabled == 'true' && mqttTransport.isMQTTConnected()
+        : webSocketServer.hasOpenConnection(name);
+      if (!reachable) {
+        req.session.tokenNotice = 'The agent must be connected before its token can be rotated.';
+        return res.redirect(editUrl);
+      }
+      const sealed = agentAuth.beginRotation(name);
+      agentComms.sendCommand(name, null, 'rotateToken', sealed, 'token-rotation', agent.commsType, false, null);
+      req.session.tokenNotice = 'Rotation sent. The current token stays valid until the agent confirms the new one.';
+      return res.redirect(editUrl);
+    }
+
+    if (action === 'reveal') {
+      const revealed = agentAuth.reveal(name);
+      if (!revealed) {
+        req.session.tokenNotice = 'This agent has no connection token.';
+      } else {
+        req.session.shownAgentToken = {
+          name,
+          token: revealed.token,
+          delivered: false,
+          rotationPending: revealed.rotationPending,
+        };
+      }
+      return res.redirect(editUrl);
+    }
+
+    const token = agentAuth.issue(name);
+    const delivered = agentAuth.supportsAgentToken(agent) ? Boolean(agentComms.sendEnrollment(name, token)) : false;
+    req.session.shownAgentToken = { name, token, delivered, rotationPending: false };
+    return res.redirect(editUrl);
+  } catch (err) {
+    logger.error(`Agent token action failed for [${name}]: ${err.message}`);
+    if (action === 'rotate') {
+      try { agentAuth.cancelRotation(name); } catch (cancelErr) { logger.warn(cancelErr.message); }
+    }
+    req.session.tokenNotice = 'The connection token could not be updated.';
+    return res.redirect(editUrl);
+  }
 });
 
 app.post('/agentEdit.html', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_EDIT), async (req, res) => {
