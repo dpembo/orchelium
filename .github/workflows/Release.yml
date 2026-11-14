@@ -216,8 +216,12 @@ jobs:
           replace_text "$findText" "$replText" version.js
           replace_text "$findText" "$replText" ./agent/version.js
 
-          echo "Assemble standalone agent.js before packaging"
-          npm run build --prefix agent
+          if node -e "const p=require('./agent/package.json'); if(!p.scripts||!p.scripts.build) process.exit(1)"; then
+            echo "Assemble standalone agent.js before packaging"
+            npm --prefix agent run build
+          else
+            echo "This branch has no agent build script. Packaging the existing agent.js."
+          fi
           test -f ./agent/agent.js
 
           echo "Create the agent tar for install from the web ux"
@@ -229,11 +233,12 @@ jobs:
             --exclude=build.js \
             --exclude=jest.config.js \
             -C ./agent .
-          if tar -tf ./public/agent/agent.tar | grep -Eq '^(src|tests|coverage|node_modules)/'; then
+          entries="$(tar -tf ./public/agent/agent.tar | sed 's|^\./||')"
+          if echo "$entries" | grep -Eq '^(src|tests|coverage|node_modules)/'; then
             echo "agent.tar includes source, tests, coverage, or node_modules."
             exit 1
           fi
-          if ! tar -tf ./public/agent/agent.tar | grep -qx 'agent.js'; then
+          if ! echo "$entries" | grep -qx 'agent.js'; then
             echo "agent.tar is missing the bundled agent.js."
             exit 1
           fi
