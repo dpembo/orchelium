@@ -253,6 +253,8 @@ app.get('/agentstatus.html',User.isAuthenticated, User.requirePermission(PERMISS
     
     const tokenNotice = request.session.tokenNotice || '';
     delete request.session.tokenNotice;
+    const agentToast = request.session.agentToast || '';
+    delete request.session.agentToast;
     const agentAuth = require('../communications/agentAuth');
     const tokenAgents = {};
     for (const agentName of Object.keys(agentdict)) {
@@ -267,6 +269,7 @@ app.get('/agentstatus.html',User.isAuthenticated, User.requirePermission(PERMISS
     history: history,
     serverVers: minSupportedVersion,
     tokenNotice: tokenNotice,
+    agentToast: agentToast,
     tokenAgents: tokenAgents,
   });
 });
@@ -284,7 +287,7 @@ app.post('/agent-submit.html', validateCsrf, User.isAuthenticated, User.requireP
   const agentAuth = require('../communications/agentAuth');
   const agent = agents.getAgent(name);
   if (agentAuth.hasCredential(name)) {
-    req.session.tokenNotice = 'The agent was approved. It keeps the connection key from installation.';
+    req.session.agentToast = 'Agent ' + name + ' has been approved and is now available';
     return res.redirect('/agentstatus.html');
   }
   if (agentAuth.supportsAgentToken(agent)) {

@@ -103,9 +103,10 @@ app.post('/settings.html', validateCsrf, User.isAuthenticated, User.requirePermi
   //icons list - filter out empty strings and validate
   logger.debug(`[ICONS_SAVE] Raw iconslist value: "${iconslist}" (type: ${typeof iconslist}, length: ${iconslist ? iconslist.length : 'undefined'})`);
   
-  if (!iconslist || iconslist.trim() === '') {
+  if (typeof iconslist !== 'string' || iconslist.trim() === '') {
     logger.warn(`[ICONS_SAVE] ATTEMPT TO SAVE EMPTY ICONS - iconslist is empty or null`);
     logger.warn(`[ICONS_SAVE] Request body keys: ${Object.keys(req.body).join(', ')}`);
+    iconslist = '';
   }
   
   const iconsList = iconslist
@@ -165,6 +166,10 @@ app.get('/settings.html',User.isAuthenticated, User.requirePermission(PERMISSION
 app.post('/settings/encryption-key', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), asyncHandler(async (req, res) => {
   const { rotateHubEncryptionKey } = require('../utils/rotateEncryptionKey');
   const agentAuth = require('../communications/agentAuth');
+  const submitted = typeof req.body.newEncryptionKey === 'string' ? req.body.newEncryptionKey.trim() : '';
+  if (!submitted || submitted === STORED_SECRET_MASK) {
+    return res.redirect('/settings.html?message=' + encodeURIComponent('Enter a new encryption key, or generate one.') + '#secrets');
+  }
   try {
     const result = await rotateHubEncryptionKey({
       dataDir: path.join(appRoot, 'data'),
@@ -186,10 +191,10 @@ app.post('/settings/encryption-key', validateCsrf, User.isAuthenticated, User.re
       }
     }
     logger.info('Hub encryption key changed and stored secrets were re-encrypted');
-    return res.redirect('/settings.html?message=' + encodeURIComponent('Encryption key changed. Copy the new key if an agent still uses the hub key for enrollment.'));
+    return res.redirect('/settings.html?message=' + encodeURIComponent('Encryption key changed. Copy the new key if an agent still uses the hub key for enrollment.') + '#secrets');
   } catch (err) {
     logger.error('Encryption key change failed: ' + err.message);
-    return res.redirect('/settings.html?message=' + encodeURIComponent(err.message));
+    return res.redirect('/settings.html?message=' + encodeURIComponent(err.message) + '#secrets');
   }
 }));
 

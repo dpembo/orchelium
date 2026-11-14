@@ -768,6 +768,9 @@ function hasValidAgents(obj) {
     M.FormSelect.init(document.querySelectorAll('select'));
     $('.modal').modal();
     updateAgentInfoBar();
+    <% if (typeof agentToast !== 'undefined' && agentToast) { %>
+    M.toast({ html: <%- JSON.stringify(agentToast) %>, displayLength: 4000 });
+    <% } %>
   </script>
 
 

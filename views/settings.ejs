@@ -264,6 +264,15 @@ function noValue(inValue){
           }
           if (window.M && M.updateTextFields) M.updateTextFields();
         }
+        function generateEncryptionKey() {
+          var bytes = new Uint8Array(32);
+          crypto.getRandomValues(bytes);
+          var hex = Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+          var field = document.getElementById('newEncryptionKey');
+          field.removeAttribute('data-secret-mask');
+          field.value = hex;
+          if (window.M && M.updateTextFields) M.updateTextFields();
+        }
       </script>
   </head>
 
@@ -273,58 +282,15 @@ function noValue(inValue){
       <div class="container">
         <h5 class="header orange-text">Settings</h5>
 
-        <% if (encryptionKeyFromEnv) { %>
-        <div class="card-panel amber lighten-4">
-          The encryption key is set by <code>ORCHELIUM_ENCRYPTION_KEY</code>. A restart uses that value instead of <code>data/encryption-key</code>. Unset the variable before changing the key here.
-        </div>
-        <% } else { %>
-        <div class="card">
-          <div class="card-content">
-            <span class="card-title">Encryption key</span>
-            <% if (encryptionKeyIsDefault) { %>
-            <p class="red-text">Stored secrets are still encrypted with the default key <strong>CHANGEIT</strong>. Change it before you keep this hub running.</p>
-            <% } else { %>
-            <p>Stored SMTP passwords, MQTT passwords, and agent token copies are encrypted with the key in <code>data/encryption-key</code>.</p>
-            <% } %>
-            <% if (shownEncryptionKey) { %>
-            <p>Copy this key now. It will not be shown again. An agent that still verifies enrollment with the hub key needs this same value.</p>
-            <div class="input-field">
-              <input id="shownEncryptionKey" type="text" readonly value="<%= shownEncryptionKey %>">
-              <label for="shownEncryptionKey" class="active">New encryption key</label>
-            </div>
-            <% } %>
-            <form action="/settings/encryption-key" method="POST" autocomplete="off">
-              <input type="hidden" name="_csrf" value="<%= csrf %>">
-              <div class="input-field">
-                <input id="newEncryptionKey" name="newEncryptionKey" type="text" autocomplete="off">
-                <label for="newEncryptionKey">New key</label>
-              </div>
-              <p class="grey-text">Leave this empty to generate a random key. Agents that still use the hub key for enrollment must be updated to the new value. Agents that already verify commands with their connection token do not.</p>
-              <button type="button" class="btn-flat" onclick="generateEncryptionKey()">Generate</button>
-              <button type="submit" class="btn orange">Change encryption key</button>
-            </form>
-          </div>
-        </div>
-        <script>
-          function generateEncryptionKey() {
-            var bytes = new Uint8Array(32);
-            crypto.getRandomValues(bytes);
-            var hex = Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
-            var field = document.getElementById('newEncryptionKey');
-            field.value = hex;
-            if (window.M && M.updateTextFields) M.updateTextFields();
-          }
-        </script>
-        <% } %>
-
         <div class="row">
-          <form class="col s12" action="settings.html" method="POST">
+          <form id="settingsForm" class="col s12" action="settings.html" method="POST">
             <input type="hidden" name="_csrf" value="<%= csrf %>">
             <div class="row">
               <div class="col s12">
                 <%
                   const settingsTabs = [
                     { id: 'server', label: 'Server', perm: 'settings.access', itemClass: 'tab col s1' },
+                    { id: 'secrets', label: 'Secrets', perm: 'settings.access', itemClass: 'tab col s1' },
                     { id: 'websocket', label: 'WebSocket', perm: 'settings.access', itemClass: 'tab orange-text col s1' },
                     { id: 'mqtt', label: 'MQTT', perm: 'settings.access', itemClass: 'tab orange-text col s1' },
                     { id: 'notifications', label: 'Alerts', perm: 'settings.access', itemClass: 'tab col s1' },
@@ -346,6 +312,43 @@ function noValue(inValue){
                 </ul>
               </div>
               <% if (hasPerm('settings.access')) { %>
+              <div id="secrets" class="col s12">
+                <br>
+                <% if (encryptionKeyFromEnv) { %>
+                <div class="card-panel amber lighten-4">
+                  The encryption key is set by <code>ORCHELIUM_ENCRYPTION_KEY</code>. A restart uses that value instead of <code>data/encryption-key</code>. Unset the variable before changing the key here.
+                </div>
+                <div class="input-field">
+                  <input id="newEncryptionKey" type="text" readonly value="<%= storedSecretMask %>">
+                  <label for="newEncryptionKey" class="active">Encryption key</label>
+                </div>
+                <% } else { %>
+                <% if (encryptionKeyIsDefault) { %>
+                <p class="red-text">Stored secrets are still encrypted with the default key <strong>CHANGEIT</strong>. Change it before you keep this hub running.</p>
+                <% } else { %>
+                <p>Stored SMTP passwords, MQTT passwords, and agent token copies are encrypted with this key.</p>
+                <% } %>
+                <% if (shownEncryptionKey) { %>
+                <p>Copy this key now. It will not be shown again. An agent that still verifies enrollment with the hub key needs this same value.</p>
+                <div class="input-field">
+                  <input id="shownEncryptionKey" type="text" readonly value="<%= shownEncryptionKey %>">
+                  <label for="shownEncryptionKey" class="active">New encryption key</label>
+                </div>
+                <% } %>
+                <input type="hidden" name="_csrf" value="<%= csrf %>" form="encryption-key-form">
+                <div class="row" style="margin-bottom: 0;">
+                  <div class="input-field col s9">
+                    <input id="newEncryptionKey" name="newEncryptionKey" type="text" autocomplete="off" form="encryption-key-form" value="<%= storedSecretMask %>" data-secret-mask="1" onfocus="clearStoredSecret(this)" onblur="restoreStoredSecret(this)">
+                    <label for="newEncryptionKey" class="active">Encryption key</label>
+                  </div>
+                  <div class="col s3" style="padding-top: 14px;">
+                    <button type="button" class="btn-flat orange-text" style="width: 100%;" onclick="generateEncryptionKey()">Generate</button>
+                  </div>
+                </div>
+                <p class="grey-text">The key is set. Click the field to replace it, or generate a new one. Agents that still use the hub key for enrollment must be updated to the new value. Agents that already verify commands with their connection token do not.</p>
+                <button type="submit" class="btn orange" form="encryption-key-form">Change encryption key</button>
+                <% } %>
+              </div>
               <div id="server" class="col s12">
                 <br>
                 <div class="row">
@@ -624,7 +627,7 @@ function noValue(inValue){
                           <label for="item-input">Provide a material-icons name </label>
                       </div>
                       <div class="col s1" style="padding-top:15px;height:10px;">
-                          <button id="add-button" class="btn waves-effect waves-light">
+                          <button type="button" id="add-button" class="btn waves-effect waves-light">
                               <i class="material-icons">add</i>
                           </button>
                       </div>
@@ -873,6 +876,7 @@ function noValue(inValue){
               </div>
             </div>
           </form>
+          <form id="encryption-key-form" action="/settings/encryption-key" method="POST" autocomplete="off"></form>
         </div>
       <br><br>
 
@@ -1034,10 +1038,10 @@ function noValue(inValue){
                   return;
                 }
 
-                document.getElementById('iconslist').value = items;
+                document.getElementById('iconslist').value = items.join(',');
               }
 
-              document.forms[0].submit();
+              document.getElementById('settingsForm').submit();
             });
 
             if (document.getElementById('icons')) {
@@ -1103,6 +1107,11 @@ function noValue(inValue){
             
             $(document).ready(function(){
               $('.tabs').tabs();
+              if (window.location.hash === '#secrets' || document.getElementById('shownEncryptionKey')) {
+                var tabsEl = document.querySelector('.tabs');
+                var tabs = tabsEl && M.Tabs.getInstance(tabsEl);
+                if (tabs) tabs.select('secrets');
+              }
             });
 
             $(document).ready(function(){

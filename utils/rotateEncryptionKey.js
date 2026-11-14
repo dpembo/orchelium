@@ -63,7 +63,7 @@ async function rotateHubEncryptionKey({
     generated = true;
   }
   if (nextSecret.length < MIN_KEY_LENGTH) {
-    throw new Error(`Use at least ${MIN_KEY_LENGTH} characters, or leave the field empty to generate a key`);
+    throw new Error(`Use at least ${MIN_KEY_LENGTH} characters`);
   }
   if (nextSecret === 'CHANGEIT') {
     throw new Error('Choose a key other than CHANGEIT');
