@@ -556,7 +556,7 @@ if (Array.isArray(schedules)) {
                 <%
                   var nextRunDisplay = schedules[i].nextRunDate || '';
                   if (typeof nextRunDisplay === 'string') {
-                    nextRunDisplay = nextRunDisplay.replace('T', ' ');
+                    nextRunDisplay = nextRunDisplay.replace(/(\d)T(\d)/, '$1 $2');
                   }
                   var nextRunMain = nextRunDisplay;
                   var nextRunMeta = '';
