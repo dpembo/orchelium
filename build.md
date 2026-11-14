@@ -52,7 +52,7 @@ Stamp `agent/version.js` before `npm run build` when the banner should show a re
 
 1. Write the release version into `version.js` and `agent/version.js`.
 2. Run `npm run build --prefix agent`.
-3. Tar the `agent/` directory, which now contains the single `agent.js`.
+3. Tar the `agent/` directory without `src/`, `tests/`, `coverage/`, `node_modules/`, `build.js`, or `jest.config.js`. The shipped program is the bundled `agent.js`. Install still runs `npm install` from `package.json`.
 
 The agent container build context is the repository root, so the image can see `shared/`. `agent/Dockerfile` installs dependencies, runs `npm run build`, then drops dev dependencies. The container starts with `node agent.js`.
 

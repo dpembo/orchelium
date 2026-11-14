@@ -16,7 +16,7 @@ RUN npm ci --include=dev
 
 COPY shared /usr/src/shared
 COPY agent/ ./
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm prune --omit=dev && rm -rf src tests coverage build.js jest.config.js
 
 # Install curl (healthcheck) and rsync for backup scripts
 RUN apt-get update && apt-get install -y --no-install-recommends curl rsync && rm -rf /var/lib/apt/lists/*

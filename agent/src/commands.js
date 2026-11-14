@@ -1,3 +1,4 @@
+const jwt = require('jsonwebtoken');
 const { COMMANDS, executionContextFromPayload } = require('../../shared/protocol');
 const runtime = require('./runtime');
 const { debug, DEBUG_LEVEL } = require('./log');
@@ -8,6 +9,39 @@ const { computeMetric } = require('./metrics');
 const { livenessProbe } = require('./liveness');
 const { writeSetting } = require('./settings');
 const { openSecret } = require('../../shared/secretBox');
+
+function storeEnrollment(commandParams) {
+  writeSetting('AGENT_TOKEN', commandParams);
+  debug(DEBUG_LEVEL.INFO, 'Stored connection token');
+  if (runtime.wsClient && runtime.wsClient.reconnectNow) {
+    runtime.wsClient.reconnectNow().catch((err) => {
+      debug(DEBUG_LEVEL.WARN, `Reconnect after enrollment failed: ${err.message}`);
+    });
+  }
+}
+
+/**
+ * A newly approved agent receives its token on the WebSocket it opened.
+ * That message is signed with the hub key, which a new hub does not share.
+ * Accept this one enrollment before a token exists. Later commands still
+ * require a valid signature, and MQTT does not use this path.
+ */
+function acceptFirstEnrollment(rawMessage) {
+  if (runtime.AGENT_TOKEN) return false;
+  const encoded = Buffer.isBuffer(rawMessage) ? rawMessage.toString('utf8') : rawMessage;
+  if (typeof encoded !== 'string' || !encoded) return false;
+  let payload;
+  try {
+    payload = jwt.decode(encoded);
+  } catch (err) {
+    return false;
+  }
+  if (!payload || payload.command !== COMMANDS.ENROLL) return false;
+  if (payload.name !== runtime.AGENT_ID) return false;
+  if (typeof payload.commandParams !== 'string' || !payload.commandParams) return false;
+  storeEnrollment(payload.commandParams);
+  return true;
+}
 
 async function handleCommand(message) {
   debug(DEBUG_LEVEL.TRACE, 'Received Command from Orchelium Server');
@@ -36,13 +70,7 @@ async function handleCommand(message) {
         debug(DEBUG_LEVEL.ERROR, 'Enrollment command did not include a token');
         return;
       }
-      writeSetting('AGENT_TOKEN', commandParams);
-      debug(DEBUG_LEVEL.INFO, 'Stored connection token');
-      if (runtime.wsClient && runtime.wsClient.reconnectNow) {
-        runtime.wsClient.reconnectNow().catch((err) => {
-          debug(DEBUG_LEVEL.WARN, `Reconnect after enrollment failed: ${err.message}`);
-        });
-      }
+      storeEnrollment(commandParams);
       return;
     }
 
@@ -115,4 +143,4 @@ async function handleCommand(message) {
   });
 }
 
-module.exports = { handleCommand };
+module.exports = { handleCommand, acceptFirstEnrollment };

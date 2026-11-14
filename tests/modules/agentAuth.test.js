@@ -62,14 +62,19 @@ describe('agent connection decisions', () => {
     delete global.agents;
   });
 
-  test('a new agent is pending and cannot displace a pending socket', () => {
+  test('an agent without a token is rejected', () => {
     expect(agentAuth.decideConnection({
       agentStatus: null,
       hasCredential: false,
       tokenValid: false,
       liveSocket: false,
       pendingSocket: false,
-    })).toBe('pending-accept');
+    })).toBe('reject');
+
+    expect(agentAuth.authorizeMessage('new-agent', null)).toEqual({
+      ok: false,
+      reason: 'connection token required',
+    });
 
     expect(agentAuth.decideConnection({
       agentStatus: 'register',
@@ -104,6 +109,15 @@ describe('agent token seal', () => {
     const sealed = sealSecret(next, current);
     expect(openSecret(sealed, current)).toBe(next);
     expect(() => openSecret(sealed, 'other-token')).toThrow();
+  });
+
+  test('an install key can be claimed once, under the agent name that presents it', async () => {
+    const token = await agentAuth.issueInstallToken();
+    const name = `install-${Date.now()}`;
+    expect(await agentAuth.claimInstallToken(name, token)).toBe(true);
+    expect(agentAuth.presentedTokenMatches(name, token)).toBe(true);
+    expect(await agentAuth.claimInstallToken(`other-${Date.now()}`, token)).toBe(false);
+    await agentAuth.forget(name);
   });
 
   test('issue and rotate keep the old token valid until the new one is presented', async () => {

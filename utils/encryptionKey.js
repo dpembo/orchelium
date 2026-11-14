@@ -35,13 +35,16 @@ function configHasEncryptedSecrets(config) {
   return valueLooksEncrypted(smtp) || valueLooksEncrypted(mqtt);
 }
 
+function recordHasEncryptedSecret(record) {
+  if (!record || typeof record !== 'object') return false;
+  if (Array.isArray(record)) return record.some(recordHasEncryptedSecret);
+  return valueLooksEncrypted(record.tokenEnc) || valueLooksEncrypted(record.pendingTokenEnc);
+}
+
 function credentialsHaveEncryptedSecrets(store) {
   if (!store || typeof store !== 'object') return false;
   for (const record of Object.values(store)) {
-    if (!record || typeof record !== 'object') continue;
-    if (valueLooksEncrypted(record.tokenEnc) || valueLooksEncrypted(record.pendingTokenEnc)) {
-      return true;
-    }
+    if (recordHasEncryptedSecret(record)) return true;
   }
   return false;
 }

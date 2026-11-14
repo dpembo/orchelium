@@ -2,6 +2,7 @@ const websocket = require('ws');
 const ReconnectingWebSocket = require('reconnecting-websocket');
 const { RetryBackoffManager } = require('./retry');
 const { publishStatusUpdate } = require('../publish');
+const { acceptFirstEnrollment } = require('../commands');
 const runtime = require('../runtime');
 const { debug, DEBUG_LEVEL } = require('../log');
 
@@ -115,6 +116,7 @@ class WebSocketHandler {
       this.client.addEventListener('message', (event) => {
         if (generation !== this.connectionGeneration) return;
         this.lastActivityTime = Date.now();
+        if (acceptFirstEnrollment(event.data)) return;
         const message = `"${event.data}"`;
         debug(DEBUG_LEVEL.TRACE, `Received message on [${connId}]`);
         this.processMessageCallback(message);

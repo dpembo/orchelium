@@ -134,7 +134,8 @@ function hasValidAgents(obj) {
       })
       .then(function(data) {
         if (!data || !data.command) throw new Error('Unable to build the install command');
-        document.getElementById('installcommand').innerText = data.command;
+        document.getElementById('installToken').value = data.token || '';
+        document.getElementById('installcommand').value = data.command;
         $('#confirmationModal').modal('open');
       })
       .catch(function() {
@@ -541,7 +542,9 @@ function hasValidAgents(obj) {
   <div id="confirmationModal" class="modal" style="width:930px">
     <div class="modal-content">
         <h4>Deploy New Agent</h4>
-        <p>Please copy and execute the provided command into a terminal sessions to start an agent deployment:<br>
+        <p>This connection key is included in the install command. An agent that does not have it cannot connect.</p>
+        <textarea id="installToken" readonly style="font-family: 'Courier New', Courier, monospace;font-size:10pt;width: 800px;height: 48px"></textarea>
+        <p>Copy and execute this command in a terminal on the server:<br>
           <a href="#" onclick="copyToClipboard()">
           <span title="copy" class="material-icons vertMid sortableHeader" style="font-size:24pt;float:right;position:relative;top:20px;left:-40px;">content_copy</span>
           </a>
@@ -733,7 +736,6 @@ function hasValidAgents(obj) {
         </table>
     </div>
     <% } else { %>
-      <%=JSON.stringify(agents)%>;
       <h5 class="header orange-text">Agent Status<% if (hasPerm('agents.create')) { %><span style="float:right"><a href="#" onclick="javascript:addAgent()"><span title="Deploy New Agent" class="material-icons vertMid tableIconButton" style="font-size:24pt;">add_circle</span></a></span><% } %></h5>
       <div style="text-align: center; padding: 60px 20px; color: #999;">
           <i class="material-icons" style="font-size: 64px; color: #ddd; display: block; margin-bottom: 20px;" title="Agent">hub</i>

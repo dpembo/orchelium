@@ -218,9 +218,25 @@ jobs:
 
           echo "Assemble standalone agent.js before packaging"
           npm run build --prefix agent
+          test -f ./agent/agent.js
 
           echo "Create the agent tar for install from the web ux"
-          tar -cvf ./public/agent/agent.tar -C ./agent .
+          tar -cvf ./public/agent/agent.tar \
+            --exclude=src \
+            --exclude=tests \
+            --exclude=coverage \
+            --exclude=node_modules \
+            --exclude=build.js \
+            --exclude=jest.config.js \
+            -C ./agent .
+          if tar -tf ./public/agent/agent.tar | grep -Eq '^(src|tests|coverage|node_modules)/'; then
+            echo "agent.tar includes source, tests, coverage, or node_modules."
+            exit 1
+          fi
+          if ! tar -tf ./public/agent/agent.tar | grep -qx 'agent.js'; then
+            echo "agent.tar is missing the bundled agent.js."
+            exit 1
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -10,6 +10,7 @@ wsServer=""
 wsPort=""
 mqttEnabled="false"
 wsEnabled="false"
+agentToken=""
 orchelium=""
 
 # Help function to display usage information
@@ -25,6 +26,7 @@ function show_help() {
     echo "  --mqttPassword=<secret>  Password when the MQTT broker requires a login."
     echo "  --wsServer=<ip>          IP address of the WebSocket server."
     echo "  --wsPort=<port>          Port of the WebSocket server."
+    echo "  --agentToken=<token>     Connection key shown by the hub when adding this agent."
     echo "  -?, --?, -h, --help      Show this help message."
     exit 0
 }
@@ -58,6 +60,9 @@ do
             ;;
         --wsPort=*)
             wsPort="${arg#*=}"
+            ;;
+        --agentToken=*)
+            agentToken="${arg#*=}"
             ;;
         -\? | --\? | -h | --help)
             show_help
@@ -255,6 +260,9 @@ echo "ORCHELIUIM_PORT=\"$port\"" >> "$SETTINGS_FILE"
 echo "WS_ENABLED=\"$wsEnabled\"" >> "$SETTINGS_FILE"
 echo "WS_SERVER=\"$wsServer\"" >> "$SETTINGS_FILE"
 echo "WS_PORT=\"$wsPort\"" >> "$SETTINGS_FILE"
+if [ -n "$agentToken" ]; then
+    echo "AGENT_TOKEN=\"$agentToken\"" >> "$SETTINGS_FILE"
+fi
 
 # Print the results
 echo "Orchelium URL          : $orcheliumUrl"
@@ -269,6 +277,7 @@ echo "MQTT Enabled           : $mqttEnabled"
 echo "WS Server              : $wsServer"
 echo "WS Port                : $wsPort"
 echo "WS Enabled             : $wsEnabled"
+echo "Connection token       : $(if [ -n "$agentToken" ]; then echo set; else echo '<none>'; fi)"
 
 echo '6. Run the installer
 '

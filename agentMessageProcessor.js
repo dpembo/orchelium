@@ -45,6 +45,10 @@ async function processMessage(topic, message, protocol, socketAgentId) {
       message = JSON.stringify(obj);
     }
 
+    if (presentedToken) {
+      await agentAuth.claimInstallToken(obj.name, presentedToken);
+    }
+
     const decision = agentAuth.authorizeMessage(obj.name, presentedToken);
     if (!decision.ok) {
       logger.warn(`Rejected ${protocol} message from [${obj.name}]: ${decision.reason}`);
@@ -309,6 +313,10 @@ async function processMessage(topic, message, protocol, socketAgentId) {
     else {
       //Register an unknown agent
       if (topic == status_topic && obj.status == "register") {
+        if (agentAuth.hasCredential(obj.name)) {
+          obj.status = "online";
+          obj.description = "Agent online";
+        }
         agents.addObjToAgentStatusDict(obj).catch(err => {
           logger.error(`Failed to register unknown agent [${obj.name}]:`, err.message);
         });

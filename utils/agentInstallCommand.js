@@ -11,7 +11,7 @@ function isEnabled(value) {
   return value === true || String(value || '').toUpperCase() === 'TRUE';
 }
 
-function buildAgentInstallCommand(config, baseUrl) {
+function buildAgentInstallCommand(config, baseUrl, agentToken) {
   const origin = String(baseUrl || '').replace(/\/+$/, '');
   const mqtt = (config && config.mqtt) || {};
   const websocket = (config && config.websocket_server) || {};
@@ -27,6 +27,7 @@ function buildAgentInstallCommand(config, baseUrl) {
     params += shellArg('--wsServer', websocket.server);
     params += shellArg('--wsPort', websocket.port);
   }
+  params += shellArg('--agentToken', agentToken);
 
   return 'wget -qO- ' + shellQuote(origin + '/agent/install.sh')
     + ' | bash -s -- --orcheliumUrl=' + shellQuote(origin)

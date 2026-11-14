@@ -62,6 +62,12 @@ describe('buildAgentInstallCommand', () => {
     expect(command).not.toContain("--mqttPassword=p'ass");
   });
 
+  it('includes the connection key when the hub provides one', () => {
+    const command = buildAgentInstallCommand(config(), 'http://hub.local', 'abc123token');
+
+    expect(command).toContain("--agentToken='abc123token'");
+  });
+
   it('includes websocket arguments when that transport is enabled', () => {
     const command = buildAgentInstallCommand(
       config({ websocket_server: { enabled: true } }),

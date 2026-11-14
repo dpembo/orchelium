@@ -81,7 +81,10 @@ async function init() {
         }
 
         const token = authorizationToken(request);
-        const tokenValid = agentAuth.presentedTokenMatches(agentId, token);
+        let tokenValid = agentAuth.presentedTokenMatches(agentId, token);
+        if (!tokenValid && token) {
+            tokenValid = await agentAuth.claimInstallToken(agentId, token);
+        }
         const knownAgent = agents.getAgent(agentId);
         const decision = agentAuth.decideConnection({
             agentStatus: knownAgent ? knownAgent.status : null,

@@ -2,7 +2,7 @@
 
 An agent proves who it is with a connection token issued by the hub. The shared hub encryption key does not do that job. This page describes how the token is created, how an agent presents it, and what remains possible until a token exists.
 
-The hub encryption key encrypts the stored copy of each token, and it signs commands for an agent that does not have a token yet. That includes the enrollment message, which is how the agent receives its token. The hub keeps the key in `data/encryption-key` (or `ORCHELIUM_ENCRYPTION_KEY` when that is set). Once the agent has stored the token and the hub has seen this build's `command-key` capability, the hub signs jobs, pings, and rotation with that token, and the agent accepts no other key. An older agent keeps receiving commands signed with the hub key. MQTT and WebSocket use the same rule. Agent status messages are not signed with the hub key.
+The hub encryption key encrypts the stored copy of each token, and it signs commands for an agent that does not have a token yet. The hub keeps the key in `data/encryption-key` (or `ORCHELIUM_ENCRYPTION_KEY` when that is set). The first enrollment is the exception: the hub sends it on the WebSocket the agent already opened, and the agent stores it without requiring that hub key. Once the agent has stored the token and the hub has seen this build's `command-key` capability, the hub signs jobs, pings, and rotation with that token, and the agent accepts no other key. An older agent keeps receiving commands signed with the hub key. MQTT and WebSocket use the same rule. Agent status messages are not signed with the hub key.
 
 The connection token is different. The hub creates one token per approved agent. Only that agent and the hub know it.
 
@@ -13,7 +13,8 @@ The connection token is different. The hub creates one token per approved agent.
 | Direction | How identity is checked |
 |---|---|
 | Hub to agent, after the agent has a token and has reported `command-key` (jobs, ping, rotate) | JWT signed with that agent's connection token. The agent ignores a command whose name is not its own, and it rejects a command signed with the hub key. |
-| Hub to agent, before a token exists, or on an older agent (enrollment and agents that do not report `command-key`) | JWT signed with the hub encryption key. |
+| Hub to agent, the first enrollment on the open WebSocket | The agent stores the token from that socket. The hub key is not required. |
+| Hub to agent, before a token exists, other than that enrollment | JWT signed with the hub encryption key. |
 | Agent to hub over WebSocket | The socket must present this agent's connection token. The `name` in each message must match that socket. |
 | Agent to hub over MQTT | Each status message carries this agent's connection token. The hub checks it before the message is processed. |
 
@@ -23,20 +24,11 @@ A client that can reach the WebSocket port and only knows an agent name cannot r
 
 ## First connection
 
-A new agent connects with its name and no token.
+Adding an agent starts on the hub. Deploy New Agent creates a connection key, shows it, and puts it in the install command as `--agentToken`. The installer writes that value to `AGENT_TOKEN` in `settings.sh`.
 
-The hub accepts that socket as pending:
+The hub keeps a hash of the key, and an encrypted copy. The key is not tied to a name until an agent connects with it. The first agent to present it claims it, and that name is then the approved agent. A second agent cannot use the same key.
 
-- It can send a single registration message, which appears on the agent list for approval.
-- It is not given jobs.
-- It cannot close a socket that is already connected under that name.
-- If that name is already approved, the connection is refused.
-
-Approving the agent creates a random token. The hub stores a hash of the token, and an encrypted copy so the token can be shown again or rotated. The plain token is shown on that agent's edit page.
-
-When the connected agent is a current build and the socket is still open, the hub also sends the token down that WebSocket. The agent writes `AGENT_TOKEN` into its local `settings.sh` and reconnects with the token. A later restart uses the same value.
-
-An MQTT agent does not receive the token on the broker, because every subscriber of the command topic would see it. Copy the value from the agent edit page into `AGENT_TOKEN` and restart the agent.
+An agent that connects with no key, or with a key the hub did not create, is refused. It does not appear on the agent list and it cannot take an existing connection. This is the same for WebSocket and MQTT, so the key does not have to be published on the broker.
 
 ---
 
@@ -60,7 +52,7 @@ Approving an agent that does not yet support connection tokens does not create a
 Until a token is issued:
 
 - A client that only knows the agent name cannot take the connection or submit status.
-- Agents still waiting to be registered can open one pending socket.
+- A client that was not given a connection key from Deploy New Agent cannot connect.
 
 The agent list shows the same blinking warning used for an out-of-date agent. The tooltip explains that the agent needs a token. People who can edit agents can open the edit page from that warning and issue one.
 

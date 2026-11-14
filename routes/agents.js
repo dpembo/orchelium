@@ -26,14 +26,22 @@ app.get('/rest/agent/:id/ping', User.isAuthenticated, User.requirePermission(PER
   res.send('{"status":"ok"}');  
 });
 
-app.get('/rest/agents/install-command', User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_CREATE), (req, res) => {
+app.get('/rest/agents/install-command', User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_CREATE), async (req, res) => {
   const host = req.get('host');
   if ((req.protocol !== 'http' && req.protocol !== 'https') || !host) {
     return res.status(400).json({ success: false, message: 'Unable to build the install command' });
   }
-  const command = buildAgentInstallCommand(serverConfig, `${req.protocol}://${host}`);
+  const agentAuth = require('../communications/agentAuth');
+  let token;
+  try {
+    token = await agentAuth.issueInstallToken();
+  } catch (err) {
+    logger.error(`Failed to create an agent install token: ${err.message}`);
+    return res.status(500).json({ success: false, message: 'Unable to build the install command' });
+  }
+  const command = buildAgentInstallCommand(serverConfig, `${req.protocol}://${host}`, token);
   res.setHeader('Cache-Control', 'no-store');
-  res.json({ command });
+  res.json({ command, token });
 });
 
 app.get('/rest/agents', User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), (req, res) => {

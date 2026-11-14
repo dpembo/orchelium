@@ -1181,6 +1181,7 @@ var require_secretBox = __commonJS({
 // src/commands.js
 var require_commands = __commonJS({
   "src/commands.js"(exports2, module2) {
+    var jwt = require("jsonwebtoken");
     var { COMMANDS, executionContextFromPayload } = require_protocol();
     var runtime2 = require_runtime();
     var { debug: debug2, DEBUG_LEVEL: DEBUG_LEVEL2 } = require_log();
@@ -1191,6 +1192,31 @@ var require_commands = __commonJS({
     var { livenessProbe } = require_liveness();
     var { writeSetting } = require_settings();
     var { openSecret } = require_secretBox();
+    function storeEnrollment(commandParams) {
+      writeSetting("AGENT_TOKEN", commandParams);
+      debug2(DEBUG_LEVEL2.INFO, "Stored connection token");
+      if (runtime2.wsClient && runtime2.wsClient.reconnectNow) {
+        runtime2.wsClient.reconnectNow().catch((err) => {
+          debug2(DEBUG_LEVEL2.WARN, `Reconnect after enrollment failed: ${err.message}`);
+        });
+      }
+    }
+    function acceptFirstEnrollment(rawMessage) {
+      if (runtime2.AGENT_TOKEN) return false;
+      const encoded = Buffer.isBuffer(rawMessage) ? rawMessage.toString("utf8") : rawMessage;
+      if (typeof encoded !== "string" || !encoded) return false;
+      let payload;
+      try {
+        payload = jwt.decode(encoded);
+      } catch (err) {
+        return false;
+      }
+      if (!payload || payload.command !== COMMANDS.ENROLL) return false;
+      if (payload.name !== runtime2.AGENT_ID) return false;
+      if (typeof payload.commandParams !== "string" || !payload.commandParams) return false;
+      storeEnrollment(payload.commandParams);
+      return true;
+    }
     async function handleCommand2(message) {
       debug2(DEBUG_LEVEL2.TRACE, "Received Command from Orchelium Server");
       runtime2.subCount++;
@@ -1215,13 +1241,7 @@ var require_commands = __commonJS({
             debug2(DEBUG_LEVEL2.ERROR, "Enrollment command did not include a token");
             return;
           }
-          writeSetting("AGENT_TOKEN", commandParams);
-          debug2(DEBUG_LEVEL2.INFO, "Stored connection token");
-          if (runtime2.wsClient && runtime2.wsClient.reconnectNow) {
-            runtime2.wsClient.reconnectNow().catch((err) => {
-              debug2(DEBUG_LEVEL2.WARN, `Reconnect after enrollment failed: ${err.message}`);
-            });
-          }
+          storeEnrollment(commandParams);
           return;
         }
         if (command === COMMANDS.ROTATE_TOKEN) {
@@ -1286,7 +1306,7 @@ var require_commands = __commonJS({
         }
       });
     }
-    module2.exports = { handleCommand: handleCommand2 };
+    module2.exports = { handleCommand: handleCommand2, acceptFirstEnrollment };
   }
 });
 
@@ -1469,6 +1489,7 @@ var require_websocket = __commonJS({
     var ReconnectingWebSocket = require("reconnecting-websocket");
     var { RetryBackoffManager } = require_retry();
     var { publishStatusUpdate: publishStatusUpdate2 } = require_publish();
+    var { acceptFirstEnrollment } = require_commands();
     var runtime2 = require_runtime();
     var { debug: debug2, DEBUG_LEVEL: DEBUG_LEVEL2 } = require_log();
     function SafeWebSocket(url, protocols) {
@@ -1565,6 +1586,7 @@ var require_websocket = __commonJS({
           this.client.addEventListener("message", (event) => {
             if (generation !== this.connectionGeneration) return;
             this.lastActivityTime = Date.now();
+            if (acceptFirstEnrollment(event.data)) return;
             const message = `"${event.data}"`;
             debug2(DEBUG_LEVEL2.TRACE, `Received message on [${connId}]`);
             this.processMessageCallback(message);

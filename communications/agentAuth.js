@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { sealSecret } = require('../shared/secretBox');
 
 const DB_KEY = 'AGENT_CREDENTIALS';
+const INSTALL_TOKENS = '_installTokens';
 
 let store = {};
 
@@ -80,15 +81,11 @@ function supportsAgentToken(agent) {
 
 /**
  * Decide what a new WebSocket may do.
- * A valid token may replace the live socket. Anything else must not.
- * An approved agent with no credential is rejected. A new name can still register.
+ * A valid token may replace the live socket. A connection without one is refused.
  */
-function decideConnection({ agentStatus, hasCredential: credentialPresent, tokenValid, liveSocket, pendingSocket }) {
+function decideConnection({ tokenValid }) {
   if (tokenValid) return 'approve-replace';
-  if (credentialPresent) return 'reject';
-  if (agentStatus && agentStatus !== 'register') return 'reject';
-  if (liveSocket || pendingSocket) return 'reject';
-  return 'pending-accept';
+  return 'reject';
 }
 
 function presentedTokenMatches(name, token) {
@@ -127,7 +124,58 @@ function authorizeMessage(name, token) {
   if (agent && agent.status && agent.status !== 'register') {
     return { ok: false, reason: 'agent has no connection token' };
   }
-  return { ok: true };
+  return { ok: false, reason: 'connection token required' };
+}
+
+function installTokenList() {
+  if (!Array.isArray(store[INSTALL_TOKENS])) store[INSTALL_TOKENS] = [];
+  return store[INSTALL_TOKENS];
+}
+
+async function issueInstallToken() {
+  const token = crypto.randomBytes(32).toString('hex');
+  const passman = require('../passman');
+  const previous = cloneStore(installTokenList());
+  installTokenList().push({
+    tokenHash: hashToken(token),
+    tokenEnc: passman.encrypt(token),
+  });
+  try {
+    await persist();
+  } catch (err) {
+    store[INSTALL_TOKENS] = previous;
+    logCredentialError(err);
+    throw err;
+  }
+  return token;
+}
+
+async function claimInstallToken(name, token) {
+  if (!name || !token || name === INSTALL_TOKENS) return false;
+  if (presentedTokenMatches(name, token)) return true;
+  const hash = hashToken(token);
+  const list = installTokenList();
+  const index = list.findIndex((record) => record && safeEqual(hash, record.tokenHash));
+  if (index === -1 || hasCredential(name)) return false;
+  const previousList = cloneStore(list);
+  const previousAgent = rememberRecord(name);
+  const record = list[index];
+  list.splice(index, 1);
+  store[name] = {
+    tokenHash: record.tokenHash,
+    tokenEnc: record.tokenEnc,
+    pendingTokenHash: null,
+    pendingTokenEnc: null,
+  };
+  try {
+    await persist();
+  } catch (err) {
+    store[INSTALL_TOKENS] = previousList;
+    restoreRecord(name, previousAgent);
+    logCredentialError(err);
+    return false;
+  }
+  return true;
 }
 
 async function issue(name) {
@@ -182,17 +230,25 @@ function cloneStore(source) {
   return JSON.parse(JSON.stringify(source));
 }
 
+function reencryptRecord(record, oldSecret, newSecret, passman) {
+  if (!record || typeof record !== 'object') return;
+  if (Array.isArray(record)) {
+    record.forEach((item) => reencryptRecord(item, oldSecret, newSecret, passman));
+    return;
+  }
+  if (record.tokenEnc) {
+    record.tokenEnc = passman.encrypt(passman.decrypt(record.tokenEnc, oldSecret), newSecret);
+  }
+  if (record.pendingTokenEnc) {
+    record.pendingTokenEnc = passman.encrypt(passman.decrypt(record.pendingTokenEnc, oldSecret), newSecret);
+  }
+}
+
 function reencryptCredentialCopy(source, oldSecret, newSecret) {
   const passman = require('../passman');
   const next = cloneStore(source);
   for (const record of Object.values(next)) {
-    if (!record || typeof record !== 'object') continue;
-    if (record.tokenEnc) {
-      record.tokenEnc = passman.encrypt(passman.decrypt(record.tokenEnc, oldSecret), newSecret);
-    }
-    if (record.pendingTokenEnc) {
-      record.pendingTokenEnc = passman.encrypt(passman.decrypt(record.pendingTokenEnc, oldSecret), newSecret);
-    }
+    reencryptRecord(record, oldSecret, newSecret, passman);
   }
   return next;
 }
@@ -215,7 +271,7 @@ function currentCredentialStore() {
 }
 
 async function forget(name) {
-  if (!store[name]) return;
+  if (!name || name === INSTALL_TOKENS || !store[name]) return;
   const previous = rememberRecord(name);
   delete store[name];
   await commitRecord(name, previous);
@@ -258,6 +314,8 @@ module.exports = {
   decideConnection,
   presentedTokenMatches,
   authorizeMessage,
+  issueInstallToken,
+  claimInstallToken,
   issue,
   beginRotation,
   cancelRotation,
