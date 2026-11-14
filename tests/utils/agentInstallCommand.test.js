@@ -78,16 +78,16 @@ describe('agent status does not embed the broker password', () => {
   const root = path.join(__dirname, '../..');
 
   it('does not pass MQTT credentials into the agent status template', () => {
-    const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+    const agents = fs.readFileSync(path.join(root, 'routes/agents.js'), 'utf8');
     const template = fs.readFileSync(path.join(root, 'views/agentstatus.ejs'), 'utf8');
-    const route = server.slice(
-      server.indexOf("app.get('/agentstatus.html'"),
-      server.indexOf("app.get('/rest/eta'")
+    const route = agents.slice(
+      agents.indexOf("app.get('/agentstatus.html'"),
+      agents.indexOf("app.post('/agent-submit.html'")
     );
-    const installStart = server.indexOf("app.get('/rest/agents/install-command'");
-    const installRoute = server.slice(
+    const installStart = agents.indexOf("app.get('/rest/agents/install-command'");
+    const installRoute = agents.slice(
       installStart,
-      server.indexOf("app.get('/rest/agents',", installStart + 1)
+      agents.indexOf("app.get('/rest/agents',", installStart + 1)
     );
 
     expect(route).not.toContain('MQTT_PASSWORD');

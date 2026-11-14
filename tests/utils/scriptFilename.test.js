@@ -52,10 +52,11 @@ describe('POST /saveScript is authenticated', () => {
 
   it('requires a session, a script permission, and a CSRF token', () => {
     const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+    const scripts = fs.readFileSync(path.join(root, 'routes/scripts.js'), 'utf8');
     const editor = fs.readFileSync(path.join(root, 'views/scripteditor.ejs'), 'utf8');
     const publicRoutesLine = server.split('\n').find((line) => line.includes('const publicRoutes'));
-    const routeStart = server.indexOf("app.post('/saveScript'");
-    const route = server.slice(routeStart, server.indexOf("app.get('/register.html'", routeStart));
+    const routeStart = scripts.indexOf("app.post('/saveScript'");
+    const route = scripts.slice(routeStart, scripts.indexOf("app.get('/rest/script/:script'", routeStart));
 
     expect(publicRoutesLine).not.toContain('saveScript');
     expect(route).toContain('validateCsrf');
