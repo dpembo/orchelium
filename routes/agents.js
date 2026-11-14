@@ -283,6 +283,10 @@ app.post('/agent-submit.html', validateCsrf, User.isAuthenticated, User.requireP
   webSocketServer.promotePending(name);
   const agentAuth = require('../communications/agentAuth');
   const agent = agents.getAgent(name);
+  if (agentAuth.hasCredential(name)) {
+    req.session.tokenNotice = 'The agent was approved. It keeps the connection key from installation.';
+    return res.redirect('/agentstatus.html');
+  }
   if (agentAuth.supportsAgentToken(agent)) {
     try {
       const token = await agentAuth.issue(name);

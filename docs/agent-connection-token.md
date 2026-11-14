@@ -26,7 +26,7 @@ A client that can reach the WebSocket port and only knows an agent name cannot r
 
 Adding an agent starts on the hub. Deploy New Agent creates a connection key, shows it, and puts it in the install command as `--agentToken`. The installer writes that value to `AGENT_TOKEN` in `settings.sh`.
 
-The hub keeps a hash of the key, and an encrypted copy. The key is not tied to a name until an agent connects with it. The first agent to present it claims it and appears in the agent list as waiting for approval. It is not given jobs until you approve it. Rejecting it removes it and tells that agent to stop. A second agent cannot use the same key.
+The hub keeps a hash of the key, and an encrypted copy. The key is not tied to a name until an agent connects with it. The first agent to present it claims it and appears in the agent list as waiting for approval. It is not given jobs until you approve it. Approval keeps that same key. Rejecting it removes it and tells that agent to stop. A second agent cannot use the same key.
 
 An agent that connects with no key, or with a key the hub did not create, is refused. It does not appear on the agent list and it cannot take an existing connection. This is the same for WebSocket and MQTT, so the key does not have to be published on the broker.
 
