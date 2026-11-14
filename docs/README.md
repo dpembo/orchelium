@@ -12,6 +12,7 @@ Orchelium is a lightweight yet powerful solution for managing and scheduling she
 - [Orchestrations](orchestrations.md) — Visual workflow builder with Execute, HTTP, Wait, Notify, Condition, Split/Join nodes
 - [User Management](user-management.md)
 - [Configuration / Settings](settings-config.md) — Rule-based thresholds, agent concurrency, webhook management, and all server/agent options
+- [Agent connection tokens](agent-connection-token.md) — How an approved agent proves its identity, and how to issue or rotate that token
 - [Plugins](plugins.md) — Plugin Manager: browse, install, update, and remove plugins from the official registry
 - [Trigger Context Guide](TRIGGER_CONTEXT_GUIDE.md) — Template substitution in scripts and orchestrations (`#{context.*}`)
 - [Webhook User Guide](WEBHOOK_USER_GUIDE.md) — Complete guide to creating and using webhooks
@@ -28,6 +29,7 @@ Orchelium is a lightweight yet powerful solution for managing and scheduling she
 - **orchestrations.md** — Building complex workflows with the visual orchestration builder, including all node types and template substitution
 - **user-management.md** — User setup, login, and password management
 - **settings-config.md** — Server and agent configuration options, backup & restore, rule-based thresholds, webhooks
+- **agent-connection-token.md** — Per-agent connection tokens, legacy agents, rotation, and MQTT broker login
 - **plugins.md** — Plugin Manager UI: browsing the official registry, installing/updating/uninstalling plugins, categories, and writing custom plugins
 - **TRIGGER_CONTEXT_GUIDE.md** — How `#{context.*}` template variables work in Execute Script, HTTP Request, and Notify nodes
 - **WEBHOOK_USER_GUIDE.md** — Webhook creation, API key management, payload access in scripts and orchestrations

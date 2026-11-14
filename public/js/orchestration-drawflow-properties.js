@@ -1087,16 +1087,16 @@ function normalizeAlias(name) {
     
 
     function fetchScriptInfo(scriptPath) {
-      const url = '/rest/script/' + scriptPath;
+      const url = '/rest/script/' + encodeURIComponent(scriptPath) + '?mode=meta';
       fetch(url)
         .then(response => {
           if (!response.ok) {
             throw new Error('Network response was not ok');
           }
-          return response.text();
+          return response.json();
         })
         .then(data => {
-          document.getElementById('prop-script-info-detail').innerHTML = extractHTMLParams(data);
+          document.getElementById('prop-script-info-detail').innerHTML = data.documentationHtml || '';
         })
         .catch(error => {
           console.error('Error fetching script info:', error);

@@ -262,10 +262,11 @@ describe('CommandExecution', () => {
   });
 
   it('should validate and sanitize command parameters', () => {
-    const commandParams = 'test; rm -rf /';
-    const sanitized = String(commandParams || '').replace(/[;&|`$()\\\"'<>]/g, '\\$&');
-    
-    expect(sanitized).toBe('test\\; rm -rf /');
+    const { sanitizeCommandParams } = require('../src/executor');
+
+    expect(sanitizeCommandParams('test; rm -rf /')).toBe('test\\; rm -rf /');
+    expect(sanitizeCommandParams('ok\nrm -rf /')).toBe('ok rm -rf /');
+    expect(sanitizeCommandParams('ok\r\nrm -rf /')).toBe('ok rm -rf /');
   });
 
   it('should track active jobs in a Map', () => {

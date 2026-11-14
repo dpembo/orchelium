@@ -511,22 +511,58 @@ async function restoreBackup(zipBuffer) {
 }
 
 /**
- * Extract zip file to directory
+ * Extract zip file to directory.
+ * Rejects links and entries that would write outside targetDir.
  * @private
  */
-async function extractZip(zipBuffer, targetDir) {
-  return new Promise((resolve, reject) => {
-    const { Readable } = require('stream');
-    const readable = Readable.from(zipBuffer);
+function safeZipDestination(targetDir, entryPath) {
+  if (typeof entryPath !== 'string' || !entryPath || entryPath.includes('\0')) return null;
+  const normalized = entryPath.replace(/\\/g, '/');
+  if (normalized.startsWith('/') || normalized.split('/').includes('..')) return null;
+  const root = path.resolve(targetDir);
+  const dest = path.resolve(root, normalized);
+  if (dest !== root && !dest.startsWith(root + path.sep)) return null;
+  return dest;
+}
 
-    readable
-      .pipe(unzipper.Extract({ path: targetDir }))
-      .on('close', resolve)
-      .on('error', (err) => {
-        logger.error('Zip extraction error:', err);
-        reject(new AppError('Failed to extract backup file', 400));
-      });
-  });
+async function extractZip(zipBuffer, targetDir) {
+  const root = path.resolve(targetDir);
+  await fs.mkdir(root, { recursive: true });
+  const directory = await unzipper.Open.buffer(zipBuffer);
+  const MAX_ENTRIES = 10000;
+  const MAX_BYTES = 1024 * 1024 * 1024;
+  if (directory.files.length > MAX_ENTRIES) {
+    throw new AppError('Backup archive has too many entries', 400);
+  }
+  let totalBytes = 0;
+  for (const entry of directory.files) {
+    const entryType = entry.type;
+    if (entryType === 'SymbolicLink' || entryType === 'Link') {
+      throw new AppError('Backup archive contains a link', 400);
+    }
+    const dest = safeZipDestination(root, entry.path);
+    if (!dest) {
+      throw new AppError('Backup archive contains an unsafe path', 400);
+    }
+    if (entryType === 'Directory' || entry.path.endsWith('/')) {
+      await fs.mkdir(dest, { recursive: true });
+      continue;
+    }
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    const { pipeline } = require('stream/promises');
+    const { Transform } = require('stream');
+    const limited = new Transform({
+      transform(chunk, _encoding, callback) {
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_BYTES) {
+          callback(new AppError('Backup archive is too large when extracted', 400));
+          return;
+        }
+        callback(null, chunk);
+      },
+    });
+    await pipeline(entry.stream(), limited, fsSync.createWriteStream(dest));
+  }
 }
 
 /**
@@ -718,4 +754,6 @@ module.exports = {
   getBackupItems,
   createBackup,
   restoreBackup,
+  safeZipDestination,
+  extractZip,
 };

@@ -127,31 +127,19 @@ function hasValidAgents(obj) {
 
   function addAgent()
   {
-
-    const serverProtocol = window.location.protocol;
-    const serverDomain = window.location.hostname;
-    const serverPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
-    const mqttEnabled = "<%=MQTT_ENABLED%>";
-    const wsEnabled = "<%=WS_ENABLED%>";
-    const mqttUsername = <%- JSON.stringify(typeof MQTT_USERNAME !== 'undefined' ? MQTT_USERNAME : '').replace(/</g, '\\u003c') %>;
-    const mqttPassword = <%- JSON.stringify(typeof MQTT_PASSWORD !== 'undefined' ? MQTT_PASSWORD : '').replace(/</g, '\\u003c') %>;
-
-    function shellArg(flag, value) {
-      if (!value) return '';
-      return ' ' + flag + "='" + String(value).replace(/'/g, `'\\''`) + "'";
-    }
-
-    var wsParams = "";
-    var mqttParams = "";
-    if(wsEnabled.toUpperCase()=="TRUE")wsParams+=" --wsServer=<%=WS_SERVER%> --wsPort=<%=WS_PORT%>";
-    if(mqttEnabled.toUpperCase()=="TRUE"){
-      mqttParams+=" --mqttServer=<%=MQTT_SERVER%> --mqttPort=<%=MQTT_SERVER_PORT%>";
-      mqttParams += shellArg('--mqttUsername', mqttUsername);
-      mqttParams += shellArg('--mqttPassword', mqttPassword);
-    }
-
-    document.getElementById('installcommand').innerText="wget -qO- " + serverProtocol + "//" + serverDomain + ":" + serverPort + "/agent/install.sh | bash -s -- --orcheliumUrl=" + serverProtocol + "//" + serverDomain + ":" + serverPort + " --installDir=/opt/OrcheliumAgent" + mqttParams + wsParams ;
-    $('#confirmationModal').modal('open');
+    fetch('/rest/agents/install-command', { headers: { 'Accept': 'application/json' } })
+      .then(function(response) {
+        if (!response.ok) throw new Error('Unable to build the install command');
+        return response.json();
+      })
+      .then(function(data) {
+        if (!data || !data.command) throw new Error('Unable to build the install command');
+        document.getElementById('installcommand').innerText = data.command;
+        $('#confirmationModal').modal('open');
+      })
+      .catch(function() {
+        doNotify('error', 'Unable to build the install command');
+      });
   }
 
   var agentSort = null;

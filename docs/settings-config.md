@@ -132,6 +132,8 @@ Properties for the MQTT server (such as [Eclipse Mosquitto](https://mosquitto.or
 | Username  | Username for authenticated MQTT Server | user |
 | Password  | Password for authenticated MQTT Server | Password |
 
+When a username is set, the agent deploy command and the agent installer receive it. See [Agent connection tokens](./agent-connection-token.md) for the broker login and for the separate per-agent token.
+
 ---
 ---
 
@@ -440,6 +442,7 @@ The data directory contains all the configuration files, as well as data stores.
 ## Related Documentation
 
 - [Installation](./installation.md): Setting up Orchelium
+- [Agent connection tokens](./agent-connection-token.md): How agents prove their identity
 - [Backup Schedules](./backup-schedules.md): Creating and managing schedules
 - [Orchestrations](./orchestrations.md): Building complex workflows
 - [User Management](./user-management.md): User accounts and access control

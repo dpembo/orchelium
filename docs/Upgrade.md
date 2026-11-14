@@ -43,6 +43,12 @@ curl -X GET http://localhost:8082/rest/definitions/status -b cookie.txt
 
 Keep `deleteSource:false` until you have validated file-backed operation.
 
+## Agent connection tokens
+
+Current hubs issue a connection token when an agent that supports it is approved. Agents approved before this change keep connecting with only their name. They show a warning on the agent list until a token is issued from the agent edit page.
+
+Issuing a token starts requiring it. Update the agent first if that build cannot store `AGENT_TOKEN`. Details are in [Agent connection tokens](./agent-connection-token.md).
+
 ---
 
 - [Back to Installation](./installation.md)

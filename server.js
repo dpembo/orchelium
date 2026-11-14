@@ -59,6 +59,15 @@ const multer = require('multer');
 const User = require('./models/user');
 const PERMISSIONS = User.PERMISSIONS;
 const { asyncHandler, errorHandlerMiddleware, AppError } = require('./utils/errorHandler.js');
+const { buildAgentInstallCommand } = require('./utils/agentInstallCommand.js');
+const { SCRIPT_FILENAME_REGEX, normalizeScriptFilename, resolveScriptPath } = require('./utils/scriptFilename.js');
+const { loadOrCreateSessionSecret } = require('./utils/sessionSecret.js');
+const { safeRedirect } = require('./utils/safeRedirect.js');
+const {
+  configHasEncryptedSecrets,
+  credentialsHaveEncryptedSecrets,
+  loadOrCreateEncryptionKey,
+} = require('./utils/encryptionKey.js');
 const asyncUtils = require('./utils/asyncUtils.js');
 dateTimeUtils = require('./utils/dateTimeUtils.js');
 mathUtils = require('./mathUtils.js');
@@ -85,7 +94,7 @@ const pluginManager = require('./pluginManager.js');
 
 serverConfig = confighandler.initServerConfig({});
 serverConfig = confighandler.loadConfigJson("./data/server-config.json");
-serverConfig = confighandler.processServerConfig(serverConfig);
+// Passwords stay encrypted until the hub encryption key is loaded below.
 
 hist = require("./history.js");
 notificationData = require("./notificationData.js");
@@ -104,11 +113,13 @@ agentMessageProcessor = require('./agentMessageProcessor.js');
 
 agentComms = require ("./communications/agentCommunication.js");
 mqttTransport = require ("./communications/mqttTransport.js");
-mqttTransport.init();
 
 webSocketBrowser = require('./communications/wsBrowserTransport.js');
 webSocketServer = require("./communications/wsServerTransport.js");
 webSocketServer.init();
+
+let encryptionKeyState = null;
+const ENCRYPTION_KEY_NOTICE_TITLE = 'Default encryption key in use';
 
 
 agentStats = new Map();
@@ -148,9 +159,6 @@ const DEFAULT_MQTT_SERVER_PORT = '1883';
 const DEFAULT_WEBSOCKER_SERVER_PORT='49981"'
 
 
-
-
-
 //------------------------------------------------------------------
 // Initialize Debug
 //------------------------------------------------------------------
@@ -183,31 +191,52 @@ if(serverConfig.server.debug=="true"){
 else{
   logger.level="warn";
 }
-// Initialize database and agents asynchronously
-(async () => {
+// Initialize encryption key, database, and agents before accepting traffic.
+const hubBootPromise = (async () => {
   try {
-    if(serverConfig.server.clearData=="true"){
-      logger.warn("!!!!!!!!!!!!!!!!!!!!!!!!!");
-      logger.warn("!! CLEARING DATA STORE !!");
-      logger.warn("!!!!!!!!!!!!!!!!!!!!!!!!!");
+    db.initializeDB('./data/data.db');
+
+    if (serverConfig.server && serverConfig.server.clearData == 'true') {
+      logger.warn('!!!!!!!!!!!!!!!!!!!!!!!!!');
+      logger.warn('!! CLEARING DATA STORE !!');
+      logger.warn('!!!!!!!!!!!!!!!!!!!!!!!!!');
       await db.clearData();
-      logger.warn("Data store cleared successfully.");
+      logger.warn('Data store cleared successfully.');
     }
 
-    //------------------------------------------------------------------
+    let hasEncryptedData = configHasEncryptedSecrets(serverConfig);
+    try {
+      const credentials = await db.getData('AGENT_CREDENTIALS');
+      if (credentialsHaveEncryptedSecrets(credentials)) hasEncryptedData = true;
+    } catch (err) {
+      // Missing credentials record is normal on a new install.
+    }
 
-    db.initializeDB('./data/data.db');
-    User.init('./data/user.db',logger,notifier);
-    agentHistory.initializeDB("./data/agentHistory.db");
+    encryptionKeyState = loadOrCreateEncryptionKey(path.join(__dirname, 'data'), {
+      hasEncryptedData,
+      envKey: process.env.ORCHELIUM_ENCRYPTION_KEY,
+    });
+    passman.setEncryptionSecret(encryptionKeyState.secret);
+    passman.enforceEncryptionKeyPolicy();
+    if (encryptionKeyState.source === 'generated') {
+      logger.info('Created a new hub encryption key in data/encryption-key');
+    } else if (encryptionKeyState.source === 'legacy') {
+      logger.warn('Existing encrypted secrets found. Stored data/encryption-key as CHANGEIT until it is changed in Settings.');
+    } else if (encryptionKeyState.source === 'env') {
+      logger.info('Hub encryption key loaded from ORCHELIUM_ENCRYPTION_KEY');
+    } else {
+      logger.info('Loaded the stored hub encryption key');
+    }
 
-    //------------------------------------------------------------------
+    serverConfig = confighandler.processServerConfig(serverConfig);
+    mqttTransport.init();
 
-    mqttDisconnectNotificiationSent=false;
+    User.init('./data/user.db', logger, notifier);
+    agentHistory.initializeDB('./data/agentHistory.db');
 
-    const execSync = require('child_process').execSync;
-    const { config } = require("process");
+    mqttDisconnectNotificiationSent = false;
 
-    agents = require("./agents.js");
+    agents = require('./agents.js');
     await agents.init();
     logger.info('Agents initialized successfully');
     const agentAuth = require('./communications/agentAuth');
@@ -218,15 +247,15 @@ else{
     process.exit(1);
   }
 
-  // Initialize webhooks data
   try {
-    const webhooksData = require("./webhooksData.js");
+    const webhooksData = require('./webhooksData.js');
     await webhooksData.init();
     logger.info('Webhooks data initialized successfully');
   } catch (error) {
     logger.error('Error initializing webhooks data:', error.message);
-    // Continue - webhooks are optional
   }
+
+  return encryptionKeyState;
 })();
 
 const port = serverConfig.server.port;
@@ -392,39 +421,52 @@ function refreshScripts() {
   return scriptsMeta;
 }
 
-function parseScriptDescriptionFromContent(scriptContent) {
-  try {
-    const lines = String(scriptContent || '').split('\n');
-    let inBlock = false;
-    let description = null;
+function parseScriptParameterBlock(scriptContent) {
+  const lines = String(scriptContent || '').split('\n');
+  let inBlock = false;
+  let description = null;
+  const parameters = [];
+  const documentationLines = [];
 
-    for (const rawLine of lines) {
-      const line = rawLine.trim();
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
 
-      if (line === '#start-params') {
-        inBlock = true;
-        continue;
-      }
-      if (line === '#end-params') {
-        break;
-      }
-
-      if (inBlock && line.startsWith('#')) {
-        description = line.substring(1).trim().replace(/<[^>]*>/g, '');
-        break;
-      }
+    if (line === '#start-params') {
+      inBlock = true;
+      continue;
+    }
+    if (line === '#end-params') {
+      break;
     }
 
-    return description || '';
+    if (inBlock && line.startsWith('#')) {
+      const content = line.substring(1).trim();
+      documentationLines.push(content);
+      if (!description) {
+        description = content.replace(/<[^>]*>/g, '');
+      } else {
+        parameters.push(content);
+      }
+    }
+  }
+
+  return {
+    metaDescription: description || '',
+    metaParameters: parameters.join('\n'),
+    documentationHtml: documentationLines.join('\n'),
+  };
+}
+
+function parseScriptDescriptionFromContent(scriptContent) {
+  try {
+    return parseScriptParameterBlock(scriptContent).metaDescription;
   } catch (error) {
     return '';
   }
 }
 
-// Regex allows characters that /saveScript preserves: alphanumeric, underscore, dot, hyphen
-// Also requires .sh suffix to ensure it's a shell script
-// Path traversal is protected by startsWith(baseDir) check
-const SCRIPT_FILENAME_REGEX = /^[a-zA-Z0-9_.-]+\.sh$/;
+// Script filenames are alphanumeric, underscore, dot, or hyphen, and end in .sh.
+// Path traversal is protected by startsWith(baseDir) check.
 
 function getValidatedScriptPath(scriptFilename) {
   if (!scriptFilename || !SCRIPT_FILENAME_REGEX.test(scriptFilename)) {
@@ -706,8 +748,14 @@ app.use('/material-design-icons', express.static('node_modules/material-design-i
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use(cookieParser());
+const sessionSecretState = loadOrCreateSessionSecret(path.join(__dirname, 'data'));
+if (sessionSecretState.created) {
+  logger.info('Created a new session secret. Existing browser sessions must sign in again.');
+} else {
+  logger.info('Loaded the stored session secret.');
+}
 app.use(session({
-  secret: process.env.ORCHELIUM_ENCRYPTION_KEY || 'CHANGEIT',
+  secret: sessionSecretState.secret,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -721,113 +769,12 @@ app.use(bodyParser.json());
 
 // Serve docs assets and markdown safely (malformed markdown should not crash the server).
 const docsRoot = path.join(__dirname, 'docs');
-app.get(/^\/docs(?:\/.*)?$/, User.isAuthenticated, asyncHandler(async (req, res, next) => {
-  const docsPath = req.path.replace(/^\/docs/, '') || '/';
-  const relPath = decodeURIComponent(docsPath).replace(/^\/+/, '');
-
-  const resolveIfFile = async (candidatePath) => {
-    try {
-      const stat = await fs.promises.stat(candidatePath);
-      return stat.isFile() ? candidatePath : null;
-    } catch (err) {
-      return null;
-    }
-  };
-
-  const safeResolve = (p) => {
-    const resolved = path.resolve(docsRoot, p);
-    const rel = path.relative(docsRoot, resolved);
-    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
-    return resolved;
-  };
-
-  let candidates = [];
-  if (!relPath || relPath.endsWith('/')) {
-    const dirTarget = safeResolve(relPath);
-    if (dirTarget) candidates.push(path.join(dirTarget, 'index.md'));
-  } else {
-    const direct = safeResolve(relPath);
-    if (direct) {
-      candidates.push(direct);
-      if (!path.extname(direct)) {
-        candidates.push(`${direct}.md`);
-        candidates.push(path.join(direct, 'index.md'));
-      }
-    }
-  }
-
-  let markdownFile = null;
-  for (const candidate of candidates) {
-    markdownFile = await resolveIfFile(candidate);
-    if (markdownFile) break;
-  }
-
-  if (!markdownFile || path.extname(markdownFile).toLowerCase() !== '.md') {
-    return next();
-  }
-
-  const stripHtml = (value) => value.replace(/<[^>]*>/g, '');
-  const slugify = (value) => stripHtml(String(value || ''))
-    .toLowerCase()
-    .trim()
-    .replace(/&[a-z0-9#]+;/gi, '')
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  const addHeadingIds = (html) => {
-    const seen = new Map();
-    return html.replace(/<h([1-6])>([\s\S]*?)<\/h\1>/gi, (match, level, headingContent) => {
-      const base = slugify(headingContent) || 'section';
-      const count = seen.get(base) || 0;
-      seen.set(base, count + 1);
-      const id = count === 0 ? base : `${base}-${count}`;
-      return `<h${level} id="${id}">${headingContent}</h${level}>`;
-    });
-  };
-
-  try {
-    const markdown = await fs.promises.readFile(markdownFile, 'utf8');
-    const htmlBody = addHeadingIds(marked.parse(markdown));
-    const relTitle = path.relative(docsRoot, markdownFile) || 'index.md';
-
-    return res.status(200).send(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Docs - ${relTitle}</title>
-  <style>
-    html { scroll-behavior: smooth; }
-    @media (prefers-reduced-motion: reduce) {
-      html { scroll-behavior: auto; }
-    }
-    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif; margin: 0; padding: 0; background: #f8f9fb; color: #1f2328; }
-    .wrap { max-width: 980px; margin: 30px auto; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 24px; }
-    .crumbs { margin-bottom: 16px; font-size: 14px; }
-    .crumbs a { color: #0969da; text-decoration: none; }
-    .crumbs a:hover { text-decoration: underline; }
-    .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 { scroll-margin-top: 16px; }
-    .markdown-body h1, .markdown-body h2, .markdown-body h3 { margin-top: 1.2em; }
-    .markdown-body pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow: auto; }
-    .markdown-body code { background: #f6f8fa; padding: 0.1em 0.3em; border-radius: 4px; }
-    .markdown-body table { border-collapse: collapse; width: 100%; }
-    .markdown-body table th, .markdown-body table td { border: 1px solid #d0d7de; padding: 6px 8px; }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="crumbs"><a href="/docs/">Docs Home</a> / ${relTitle}</div>
-    <article class="markdown-body">${htmlBody}</article>
-  </div>
-</body>
-</html>`);
-  } catch (err) {
-    logger.error('Error rendering docs markdown', err);
-    return res.status(500).send('Unable to render documentation file.');
-  }
-}));
+global.User = User;
+global.asyncHandler = asyncHandler;
+global.path = path;
+global.marked = marked;
+global.docsRoot = docsRoot;
+require('./routes/docs')(app);
 
 // Static docs assets (images/files) are served after markdown route handling.
 app.use('/docs', User.isAuthenticated, express.static(docsRoot));
@@ -857,7 +804,7 @@ app.use((req, res, next) => {
 // CSRF validation middleware for form-based authenticated routes
 const validateCsrf = (req, res, next) => {
   // Skip validation for public routes
-  const publicRoutes = ['/login.html', '/register.html', '/forgot.html', '/saveScript'];
+  const publicRoutes = ['/login.html', '/register.html', '/forgot.html'];
   if (publicRoutes.includes(req.path) || req.path.startsWith('/reset') || req.path.startsWith('/invite')) {
     logger.debug(`[CSRF] Skipping validation for public route: ${req.path}`);
     return next();
@@ -897,14 +844,6 @@ let sensitiveDataToken = null;
 function initializeSensitiveDataToken() {
   if (!sensitiveDataToken) {
     sensitiveDataToken = crypto.randomBytes(32).toString('hex');
-    console.log('\n');
-    console.log('='.repeat(80));
-    console.log('SENSITIVE DATA API TOKEN (save this in a safe place):');
-    console.log(`Token: ${sensitiveDataToken}`);
-    console.log('Use as header: X-Data-Token: <token>');
-    console.log('Or as URL param: ?dataToken=<token>');
-    console.log('='.repeat(80));
-    console.log('\n');
   }
   return sensitiveDataToken;
 }
@@ -916,7 +855,7 @@ const validateSensitiveDataToken = (req, res, next) => {
   
   if (!providedToken || providedToken !== token) {
     logger.warn(`[SENSITIVE-API] Unauthorized access attempt to ${req.method} ${req.path} - invalid or missing token`);
-    return res.status(403).json({ success: false, message: 'Invalid or missing sensitive data token. Check server console for token.' });
+    return res.status(403).json({ success: false, message: 'Invalid or missing sensitive data token' });
   }
   
   logger.debug(`[SENSITIVE-API] Authorized access to ${req.method} ${req.path}`);
@@ -926,553 +865,47 @@ const validateSensitiveDataToken = (req, res, next) => {
 
 // Routes
 // Login route: Redirect to registration if no user is registered
-app.get('/login.html', asyncHandler(async (req, res) => {
-  const redirect = req.query.redirect;
-  logger.debug("Getting login page");
-  if (serverConfig.server.hostname == "UNDEFINED") {
-    serverConfig.server.hostname = req.hostname;
-  }
 
-  const userCount = await User.getUserCount();
-  if (userCount > 0) {
-    logger.debug("A user is registered");
-    res.render('login', {
-      version: version,
-      redirect: redirect,
-      csrf: req.csrfToken(),
-    });
-  } else {
-    logger.warn("no user exists - switching to first time register");
-    res.redirect('/register.html');
-  }
-}));
 
 // Logout route
-app.get('/logout.html', (req, res) => {
-  req.session.destroy(() => {
-    res.redirect('/login.html');
-  });
-});
 
-
-app.post('/saveScript', express.json(), asyncHandler(async (req, res) => {
-  // Sanitize filename: keep only alphanumeric, underscore, dot, hyphen
-  let scriptName = req.body.scriptName.replace(/[^a-zA-Z0-9_.-]/g, '');
-  
-  // Enforce .sh suffix if not present
-  if (!scriptName.endsWith('.sh')) {
-    scriptName = scriptName + '.sh';
-  }
-
-  // Path traversal protection
-  const baseDir = path.join(__dirname, 'scripts');
-  const filePath = path.join(baseDir, scriptName);
-  if (!filePath.startsWith(baseDir)) {
-    throw new AppError('Invalid script filename', 400);
-  }
-
-  const scriptContent = req.body.script;
-
-  try {
-    await asyncUtils.writeFileAsync(filePath, scriptContent);
-    logger.info(`File ${scriptName} saved successfully`);
-    res.json({ status: 'success', message: 'File saved successfully.', scriptName });
-  } catch (error) {
-    logger.error(`Error saving script ${scriptName}:`, error.message);
-    throw new AppError(`Failed to save script: ${error.message}`, 500);
-  }
-}));
 
 // Register route: displays registration form if allowed and not already registered
-app.get('/register.html', asyncHandler(async (req, res) => {
-  const userCount = await User.getUserCount();
-  logger.debug("User Count:" + userCount);
-  if (userCount <= 0) {
-    res.render('register', { csrf: req.csrfToken() });
-  } else {
-    logger.warn("Register accessed when user already exists");
-    res.redirect('/?message=Register+is+disabled');
-  }
-}));
 
-app.post('/register.html', validateCsrf, asyncHandler(async (req, res) => {
-  if (await User.getUserCount() <= 0) {
-    const user = await User.createUser(req.body.username, req.body.email, req.body.password);
-    res.redirect('/login.html?message=User+Created.+Please+authenticate+with+your+credentials');
-  } else {
-    throw new AppError('User registration is disabled', 400);
-  }
-}));
 
 // Forgot password route: displays forgot password form
-app.get('/forgot.html', (req, res) => {
-  if(serverConfig.server.hostname=="UNDEFINED")serverConfig.server.hostname = req.hostname;
-  res.render('forgot', { csrf: req.csrfToken() });
-});
 
-app.post('/forgot.html', validateCsrf, asyncHandler(async (req, res) => {
-  const token = await User.generateResetToken(req.body.username);
-  logger.info(`Reset token generated for user: ${req.body.username}`);
-  const message = "Please+check+your+email+for+a+one+time+password+reset+link+to+continue";
-  res.redirect('/login.html?message=' + message);
-}));
 
 // Reset password route: displays reset password form
-app.get('/reset/:token/:user', asyncHandler(async (req, res) => {
-  const tokenValid = await User.isResetTokenValid(req.params.user, req.params.token);
-  if (tokenValid !== null) {
-    res.render('reset', { token: req.params.token, user: req.params.user, csrf: req.csrfToken() });
-  } else {
-    res.redirect('/forgot.html?message=Your+one+time+reset+token+has+already+been+used+or+timed+out.+Please+reset+your+passsword+again');
-  }
-}));
 
-app.post('/reset/:token/:user', validateCsrf, asyncHandler(async (req, res) => {
-  const tokenValid = await User.isResetTokenValid(req.params.user, req.params.token);
-  if (tokenValid !== null) {
-    const resetSuccessful = await User.resetPassword(req.params.user, req.params.token, req.body.password);
-    if (resetSuccessful) {
-      logger.info(`Password reset successful for user: ${req.params.user}`);
-      res.redirect('/login.html?message=Your+password+has+been+reset.+Please+login+with+your+new+credentials');
-    } else {
-      res.redirect(`/reset/${req.params.token}/${req.params.user}?message=Unable+to+reset+the+password`);
-    }
-  } else {
-    res.redirect('/forgot.html?message=Your+one+time+reset+token+has+already+been+used+or+timed+out.+Please+reset+your+passsword+again');
-  }
-}));
 
 // Invite acceptance route — like reset, but activates an invited (pending) user
-app.get('/invite/:token/:username', asyncHandler(async (req, res) => {
-  if(serverConfig.server.hostname === 'UNDEFINED') serverConfig.server.hostname = req.hostname;
-  const valid = await User.isInviteTokenValid(req.params.username, req.params.token);
-  if (valid) {
-    res.render('invite', { token: req.params.token, username: req.params.username, csrf: req.csrfToken() });
-  } else {
-    res.redirect('/login.html?message=Invite+link+has+expired+or+already+been+used');
-  }
-}));
 
-app.post('/invite/:token/:username', validateCsrf, asyncHandler(async (req, res) => {
-  const { password, password2 } = req.body;
-  const inviteUrl = new URL(`/invite/${req.params.token}/${req.params.username}`, `${req.protocol}://${req.get('host')}`);
-
-  if (typeof password !== 'string' || password.length < 8) {
-    inviteUrl.searchParams.append('message', 'Password must be at least 8 characters long');
-    return res.redirect(inviteUrl.toString());
-  }
-
-  if (password2 !== undefined && password !== password2) {
-    inviteUrl.searchParams.append('message', 'Passwords do not match');
-    return res.redirect(inviteUrl.toString());
-  }
-
-  const accepted = await User.acceptInvite(req.params.username, req.params.token, password);
-  if (accepted) {
-    logger.info(`Invite accepted for user: ${req.params.username}`);
-    res.redirect('/login.html?message=Account+activated.+Please+login+with+your+new+credentials');
-  } else {
-    inviteUrl.searchParams.append('message', 'Invite link has expired or already been used');
-    res.redirect(inviteUrl.toString());
-  }
-}));
-
-
-app.post('/login.html', validateCsrf, asyncHandler(async (req, res) => {
-  const { username, password, redirect } = req.body;
-  const ipAddress = req.headers['x-forwarded-for'] || req.ip;
-  logger.info(`Logging in user ${username} from IP: ${ipAddress}`);
-
-  const user = await User.getUserByUsername(username.toLowerCase());
-  if (!user) {
-    logger.warn(`Login attempt for non-existent user: ${username}`);
-    const loginUrl = new URL('/login.html', `${req.protocol}://${req.get('host')}`);
-    loginUrl.searchParams.append('message', 'Invalid username or password');
-    if (redirect) loginUrl.searchParams.append('redirect', redirect);
-    return res.redirect(loginUrl.toString());
-  }
-
-  if (!user.isActive) {
-    logger.warn(`Login attempt for inactive account: ${username}`);
-    const loginUrl = new URL('/login.html', `${req.protocol}://${req.get('host')}`);
-    if (!user.password) {
-      loginUrl.searchParams.append('message', 'Account is not active yet. Please complete your invite setup from the email link.');
-    } else {
-      loginUrl.searchParams.append('message', 'Account has been deactivated');
-    }
-    return res.redirect(loginUrl.toString());
-  }
-
-  if (!user.password) {
-    logger.warn(`Login blocked for user without password hash: ${username}`);
-    const loginUrl = new URL('/login.html', `${req.protocol}://${req.get('host')}`);
-    loginUrl.searchParams.append('message', 'Invalid username or password');
-    if (redirect) loginUrl.searchParams.append('redirect', redirect);
-    return res.redirect(loginUrl.toString());
-  }
-
-  const passwordMatch = await bcrypt.compare(password, user.password);
-  if (!passwordMatch) {
-    logger.warn(`Failed login attempt for user: ${username} from IP: ${ipAddress}`);
-    if (serverConfig.server.loginFailEnabled == "true") {
-      notifier.sendNotification("Authentication Failure",
-        `User Login for account ${username} from IP: ${ipAddress} failed. If this was unexpected, please change the password immediately`,
-        "WARNING");
-    }
-    const loginUrl = new URL('/login.html', `${req.protocol}://${req.get('host')}`);
-    loginUrl.searchParams.append('message', 'Invalid username or password');
-    if (redirect) loginUrl.searchParams.append('redirect', redirect);
-    return res.redirect(loginUrl.toString());
-  }
-
-  logger.debug("passwords match - authentication successful");
-  user.lastLogin = Date.now();
-  await User.updateUser(user);
-  req.session.user = user;
-
-  if (serverConfig.server.loginSuccessEnabled == "true") {
-    notifier.sendNotification("UserAuthentication",
-      `User Logged in for account ${username} from IP: ${ipAddress}`,
-      "INFORMATION");
-  }
-
-  // Determine redirect location
-  if (serverConfig.websocket_server.port && serverConfig.websocket_server.port !== null && serverConfig.websocket_server.port.length > 0) {
-    if (redirect && redirect !== null) {
-      logger.debug(`Found redirect in url: ${redirect}`);
-      res.redirect(redirect);
-    } else {
-      res.redirect('/');
-    }
-  } else {
-    // MQTT Not connected - go to initial setup
-    res.redirect('/initial-setup-welcome.html');
-  }
-}));
 
 //Initial setup
-app.get('/initial-setup.html', User.isAuthenticated, asyncHandler(async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-
-  res.render('initialsetup1', {
-    version: version,
-    serverConfig: serverConfig,
-    csrf: req.csrfToken(),
-  });
-}));
-
 
 
 //Initial setup MQTT
-app.get('/initial-setup-mqtt.html',User.isAuthenticated, async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-
-  const fullHost = req.get('host'); // or req.headers.host
-  const hostName = fullHost.split(':')[0]; // This strips the port if it exists
-
-  res.render('initialsetupMQTT',{
-    version: version,
-    serverConfig: serverConfig,
-    hostName: hostName,
-    csrf: req.csrfToken(),
-  }); 
-});
 
 
 //Initial setup Welcome
-app.get('/initial-setup-welcome.html',User.isAuthenticated, async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
 
-  const fullHost = req.get('host'); // or req.headers.host
-  const hostName = fullHost.split(':')[0]; // This strips the port if it exists
-
-  res.render('initialsetupWelcome',{
-    version: version,
-    serverConfig: serverConfig,
-    hostName: hostName,
-    csrf: req.csrfToken(),
-  }); 
-});
 
 //Initial setup Complete
-app.get('/initial-setup-complete.html',User.isAuthenticated, async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
 
-  res.render('initialsetupComplete',{
-    version: version,
-    serverConfig: serverConfig,
-    csrf: req.csrfToken(),
-  }); 
-});
 
 //Initial setup
-app.get('/initial-setup-server.html',User.isAuthenticated, async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
+
+
+const STORED_SECRET_MASK = '********';
+
+function replaceStoredSecret(submitted) {
+  if (typeof submitted !== 'string' || submitted.length === 0 || submitted === STORED_SECRET_MASK) {
+    return null;
   }
+  return submitted;
+}
 
-  const fullHost = req.get('host'); // or req.headers.host
-  const hostName = fullHost.split(':')[0]; // This strips the port if it exists
-
-  res.render('initialsetupServer',{
-    version: version,
-    serverConfig: serverConfig,
-    hostName: hostName,
-    csrf: req.csrfToken(),
-  }); 
-});
-
-app.post('/initial-setup-server.html', validateCsrf, User.isAuthenticated, async (req, res) => {
-  logger.debug("POST for initial-setup-server.html");
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-
-  var { wsServer,webserverPort, wsPort,timezone} = req.body;
-  //var mqttEnabled = serverConfig.mqtt.enabled;
-  serverConfig.websocket_server.server = wsServer;
-  serverConfig.server.hostname = wsServer;
-  serverConfig.server.port = webserverPort;
-  serverConfig.websocket_server.port = wsPort;
-  
-  serverConfig.server.timezone = timezone;
-
-  confighandler.saveServerConfig();
-  
-  //if(mqttEnabled=="true")return res.redirect('/initial-setup-mqtt.html');
-  return res.redirect('/initial-setup-complete.html');
-  //if(mqttEnabled=="false")res.redirect('/initial-setup.html?message=One+of+WebSocket+or+MQTT+must+be+checked');
-});
-
-
-
-app.post('/initial-setup1.html', validateCsrf, User.isAuthenticated, async (req, res) => {
-  logger.debug("POST for initial-setup1.html");
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-
-  logger.warn(`[ICONS_RESET] INITIAL SETUP 1 CALLED - This will reset job_icons to defaults`);
-  logger.warn(`[ICONS_RESET] Previous icons: ${JSON.stringify(serverConfig.job_icons)}`);
-
-  var { websocket,mqtt} = req.body;
-  var mqttEnabled = "false";
-
-  if(mqtt && mqtt=="on")mqttEnabled="true";
-
-  serverConfig.websocket_server.enabled = "true";
-  serverConfig.mqtt.enabled = mqttEnabled;
-
-  serverConfig.job_icons=[
-    "work","cloud","save","storage","dns","layers","schema","delete","hub","insert_drive_file",
-    "folder","folder_shared","folder_delete","folder_special","folder_zip","drive_folder_upload",
-    "topic","rule_folder","sd_card","archive","library_music","video_library","video_camera_back",
-    "photo_library","audio_file","password","account_box","build","restart_alt","start","stop_circle",
-    "settings","security","safety_check","sports_esports","dangerous","error","favorite","send",
-    "search","feed","shopping_cart","room_service","email","desktop_windows","camera_alt","laptop",
-    "power_settings_new","router","schedule","flag","grade","image","key","receipt","money"
-  ]
-
-  logger.warn(`[ICONS_RESET] New icons set: ${serverConfig.job_icons.length} icons`);
-  logger.debug(`websocket ${websocket}, MQTT ${mqtt}`)
-  confighandler.saveServerConfig();
-  
-  // if(mqttEnabled=="true")return res.redirect('/initial-setup-mqtt.html');
-  // else return res.redirect('/initial-setup-complete.html');
-  return res.redirect('/initial-setup-complete.html');
-});
-
-
-app.post('/initial-setupMQTT.html', validateCsrf, User.isAuthenticated, async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-
-    var { mqttServer,mqttPort,mqttUsername,mqttPassword} = req.body;
-    serverConfig.mqtt.server=mqttServer;
-    serverConfig.mqtt.port=mqttPort;
-    serverConfig.mqtt.username=mqttUsername;
-    serverConfig.mqtt.password=mqttPassword;
-    logger.debug(`MQTT Server ${mqttServer}, Port ${mqttPort}`)
-    confighandler.saveServerConfig();
-    
-    try {
-      logger.debug("Conneting to MQTT Server");
-      await mqttTransport.connectToMQTTServer();
-      logger.debug("Returned ok");
-      // Connection successful, perform actions here
-      return res.redirect('/initial-setup-complete.html');
-    } 
-    catch (error) {
-      // Handle connection error here
-      logger.warn("Unable to connect to MQTT server");
-      logger.warn(error);
-      return res.redirect('/initial-setupMQTT.html?message=Please+Check+Your+MQTT+Server+and+Settings');  
-    }
-});
-
-app.post('/settings.html', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-
-  logger.debug(`[SETTINGS_POST] Received form submission with ${Object.keys(req.body).length} fields`);
-  logger.debug(`[SETTINGS_POST] Request body keys: ${Object.keys(req.body).join(', ')}`);
-
-  var { protocol, serverHostname, serverPort, timezone, notificationType,loglevel,
-    websocketEnabled,websocketServer,websocketPort,
-    mqttEnabled,mqttServer,mqttPort,mqttUsername,mqttPassword,
-    smtpEnabled, smtpServer, smtpPort, smtpSecure, smtpUsername, smtpPassword,smtpEmailFrom,smtpEmailTo,
-    webHookUrl,iconslist,
-    minDisconnectDurationForNotification,
-    templateEnabled,templateServer,
-    connectionEnabled,loginSuccessEnabled,loginFailEnabled,jobFailEnabled,
-    pluginRegistryUrl,pluginCacheLocation,validationLocation,rejectedLocation,iconsLocation,installsLocation    
-  } = req.body;
-
-  logger.debug(`[SETTINGS_POST] iconslist extracted from req.body: "${iconslist}" (type: ${typeof iconslist})`);
-
-  //Template
-  if(templateEnabled=="on")templateEnabled="true";
-  else templateEnabled="false";
-  serverConfig.templates.enabled = templateEnabled;
-  serverConfig.templates.repositoryUrl = templateServer;
-
-  //Plugin Manager settings
-  if (!serverConfig.pluginRegistry) serverConfig.pluginRegistry = {};
-  if (pluginRegistryUrl) serverConfig.pluginRegistry.url = pluginRegistryUrl;
-  if (pluginCacheLocation) serverConfig.pluginRegistry.plugins = pluginCacheLocation;
-  if (validationLocation) serverConfig.pluginRegistry.validation = validationLocation;
-  if (rejectedLocation) serverConfig.pluginRegistry.rejected = rejectedLocation;
-  if (iconsLocation) serverConfig.pluginRegistry.icons = iconsLocation;
-  if (installsLocation) serverConfig.pluginRegistry.installs = installsLocation;
-
-  // Allow clearing the token by saving an empty string
-  // if(serverConfig.pluginRegistry.githubToken !== undefined && serverConfig.pluginRegistry.githubToken !== null) {
-  //   serverConfig.pluginRegistry.githubToken = pluginGithubToken || '';
-  // }
-
-  //websocket Settings
-  if(websocketEnabled=="on")websocketEnabled="true";
-  else websocketEnabled="false";
-  serverConfig.websocket_server.enabled = websocketEnabled;
-  serverConfig.websocket_server.port = websocketPort;
-  serverConfig.websocket_server.server = websocketServer;
-
-  //MQTT Settings
-  if(mqttEnabled=="on")mqttEnabled="true";
-  else mqttEnabled="false";
-  serverConfig.mqtt.enabled = mqttEnabled;
-  serverConfig.mqtt.server = mqttServer;
-  serverConfig.mqtt.port = mqttPort;
-  if(mqttUsername!=null && mqttUsername.length>0){
-    serverConfig.mqtt.username = mqttUsername;
-    serverConfig.mqtt.password = mqttPassword;
-  }
-
-  //STMP Settings
-  if(smtpEnabled=="on")smtpEnabled="true";
-  else smtpEnabled="false";
-  serverConfig.smtp.enabled = smtpEnabled;
-  serverConfig.smtp.host = smtpServer;
-  serverConfig.smtp.port = smtpPort;
-  if(smtpSecure=="on")smtpSecure="true";
-  else smtpSecure="false";
-  serverConfig.smtp.secure = smtpSecure;
-  serverConfig.smtp.username = smtpUsername;
-  serverConfig.smtp.password = smtpPassword;
-  serverConfig.smtp.emailFrom = smtpEmailFrom;
-  serverConfig.smtp.emailTo = smtpEmailTo;
-
-  //Webhook settings
-  serverConfig.webhook.url = webHookUrl;
-
-  //Server Settings
-  serverConfig.server.loglevel = parseInt(loglevel);
-  if(serverConfig.server.loglevel == 0)serverConfig.server.debug="false";
-  else serverConfig.server.debug="true";
-  serverConfig.server.clearData = "false";
-  serverConfig.server.protocol = protocol;
-  serverConfig.server.hostname = serverHostname;
-  serverConfig.server.timezone = timezone;
-  serverConfig.server.notificationType = notificationType;
-  serverConfig.server.port = parseInt(serverPort);
-  serverConfig.server.minDisconnectDurationForNotification = parseInt(minDisconnectDurationForNotification);
-
-  serverConfig.server.connectionEnabled = connectionEnabled === "on" ? "true" : "false";
-  serverConfig.server.loginSuccessEnabled = loginSuccessEnabled === "on" ? "true" : "false";
-  serverConfig.server.loginFailEnabled = loginFailEnabled === "on" ? "true" : "false";
-  serverConfig.server.jobFailEnabled = jobFailEnabled === "on" ? "true" : "false";
-  
-
-  //icons list - filter out empty strings and validate
-  logger.debug(`[ICONS_SAVE] Raw iconslist value: "${iconslist}" (type: ${typeof iconslist}, length: ${iconslist ? iconslist.length : 'undefined'})`);
-  
-  if (!iconslist || iconslist.trim() === '') {
-    logger.warn(`[ICONS_SAVE] ATTEMPT TO SAVE EMPTY ICONS - iconslist is empty or null`);
-    logger.warn(`[ICONS_SAVE] Request body keys: ${Object.keys(req.body).join(', ')}`);
-  }
-  
-  const iconsList = iconslist
-    .split(',')
-    .map(icon => icon.trim())
-    .filter(icon => icon.length > 0);
-  
-  logger.debug(`[ICONS_SAVE] After processing - found ${iconsList.length} valid icons: ${JSON.stringify(iconsList)}`);
-  
-  // If no valid icons provided, keep the existing ones or use defaults
-  if (iconsList.length === 0) {
-    logger.warn(`[ICONS_SAVE] NO VALID ICONS PROVIDED - keeping existing configuration`);
-    logger.warn(`[ICONS_SAVE] Current serverConfig.job_icons: ${JSON.stringify(serverConfig.job_icons)}`);
-    if (!serverConfig.job_icons || serverConfig.job_icons.length === 0) {
-      logger.warn(`[ICONS_SAVE] No existing icons found, restoring defaults`);
-      // Fallback to default icons if none exist
-      serverConfig.job_icons = [
-        "work","cloud","save","storage","dns","layers","schema","delete","hub","insert_drive_file",
-        "folder","folder_shared","folder_delete","folder_special","folder_zip","drive_folder_upload",
-        "topic","rule_folder","sd_card","archive","library_music","video_library","video_camera_back",
-        "photo_library","audio_file","password","account_box","build","restart_alt","start","stop_circle",
-        "settings","security","safety_check","sports_esports","dangerous","error","favorite","send",
-        "search","feed","shopping_cart","room_service","email","desktop_windows","camera_alt","laptop",
-        "power_settings_new","router","schedule","flag","grade","image","key","receipt","money"
-      ];
-      logger.warn(`[ICONS_SAVE] Defaults restored: ${serverConfig.job_icons.length} icons`);
-    }
-  } else {
-    logger.info(`[ICONS_SAVE] Successfully saved ${iconsList.length} valid icons`);
-    serverConfig.job_icons = iconsList;
-  }
-
-  confighandler.saveServerConfig();
-
-  return res.redirect('/settings.html?message="Saved+Settings.+Please+restart+the+container+for+the+values+to+take+effect');
-  //res.render('settings.ejs', { serverConfig, user });
-});
-
-app.get('/settings.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  res.render('settings.ejs', { serverConfig, user, csrf: req.csrfToken() });
-});
 
 // Backup Management Routes
 // Configure multer for in-memory file uploads
@@ -1481,64 +914,6 @@ const upload = multer({
   limits: { fileSize: 500 * 1024 * 1024 } // 500MB max
 });
 
-app.get('/api/backup/items', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), (req, res) => {
-  try {
-    const items = backupManager.getBackupItems();
-    res.json(items);
-  } catch (err) {
-    logger.error('Error getting backup items:', err);
-    res.status(500).json({ error: 'Failed to get backup items' });
-  }
-});
-
-app.post('/api/backup/create', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), asyncHandler(async (req, res) => {
-  try {
-    const options = req.body;
-    logger.info('Creating backup with options:', options);
-
-    // Create backup
-    const backupBuffer = await backupManager.createBackup(options);
-
-    // Generate filename with timestamp
-    const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
-    const filename = `orchelium-backup-${timestamp}.zip`;
-
-    // Send file to client
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', backupBuffer.length);
-    res.send(backupBuffer);
-
-    logger.info(`Backup downloaded: ${filename}`);
-  } catch (err) {
-    logger.error('Backup creation error:', err);
-    res.status(err.statusCode || 500).json({ error: err.message || 'Backup failed' });
-  }
-}));
-
-app.post('/api/backup/restore', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), upload.single('backupFile'), asyncHandler(async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No backup file provided' });
-    }
-
-    logger.info('Starting backup restore from uploaded file');
-
-    // Restore backup from upload
-    const results = await backupManager.restoreBackup(req.file.buffer);
-
-    logger.info('Backup restore completed:', results);
-    res.json({
-      success: true,
-      itemsRestored: results.itemsRestored,
-      warnings: results.warnings,
-      recommendations: results.recommendations,
-    });
-  } catch (err) {
-    logger.error('Backup restore error:', err);
-    res.status(err.statusCode || 500).json({ error: err.message || 'Restore failed' });
-  }
-}));
 
 // ============================================================================
 // WEBHOOK JOB TRIGGER API
@@ -1555,95 +930,7 @@ app.post('/api/backup/restore', User.isAuthenticated, User.requirePermission(PER
  *        -H "Content-Type: application/json" \
  *        -d '{"status": "warning", "message": "Storage at 85% capacity"}'
  */
-app.post('/api/webhook/trigger/:jobName', asyncHandler(async (req, res) => {
-  try {
-    const { jobName } = req.params;
-    const webhookManager = require('./webhookManager.js');
-    const webhooksData = require('./webhooksData.js');
-    const triggerContextModule = require('./triggerContext.js');
-    
-    // Extract webhook API key from request
-    const providedKey = webhookManager.extractWebhookKeyFromRequest(req);
-    
-    if (!providedKey) {
-      logger.warn(`[WEBHOOK] Trigger attempt on job [${jobName}] without API key`);
-      return res.status(401).json({ error: 'Webhook API key required (via ?key= or X-Webhook-Key header)' });
-    }
-    
-    if (!webhookManager.isValidWebhookKey(providedKey)) {
-      logger.warn(`[WEBHOOK] Trigger attempt on job [${jobName}] with invalid key format`);
-      return res.status(401).json({ error: 'Invalid webhook API key format' });
-    }
-    
-    // Validate webhook key against database
-    let validatedWebhook = null;
-    try {
-      validatedWebhook = await webhooksData.validateWebhookKey(jobName, providedKey);
-      if (!validatedWebhook) {
-        logger.warn(`[WEBHOOK] Webhook key not found for job [${jobName}]`);
-        return res.status(401).json({ error: 'Invalid webhook API key for this job' });
-      }
-    } catch (validateErr) {
-      logger.warn(`[WEBHOOK] Webhook key validation failed for job [${jobName}]: ${validateErr.message}`);
-      return res.status(401).json({ error: 'Webhook key validation failed' });
-    }
-    
-    const payload = req.body || {};
-    
-    if (!webhookManager.isValidWebhookPayload(payload)) {
-      logger.warn(`[WEBHOOK] Invalid payload for job [${jobName}]`);
-      return res.status(400).json({ error: 'Webhook payload must be a JSON object' });
-    }
 
-    const scheduler = require('./scheduler.js');
-    const scheduledJob = scheduler.getSchedule(jobName);
-    if (scheduledJob && (scheduledJob.disabled === true || scheduledJob.disabled === 'true')) {
-      logger.info(`[WEBHOOK] Job [${jobName}] is disabled - trigger ignored`);
-      return res.status(409).json({ success: false, error: 'Job is disabled' });
-    }
-    
-    logger.info(`[WEBHOOK] Triggering job [${jobName}] from webhook [${validatedWebhook.id}]`);
-    
-    // Create webhook trigger context
-    const crypto = require('crypto');
-    const executionId = crypto.randomBytes(8).toString('hex');
-    
-    const webhookTriggerContext = await triggerContextModule.createWebhookTriggerContext(
-      validatedWebhook.id,
-      jobName,
-      payload,
-      executionId
-    );
-    webhookTriggerContext.webhookName = validatedWebhook.name || '';
-    
-    // Record the trigger event
-    try {
-      await webhooksData.recordWebhookTrigger(jobName, validatedWebhook.id);
-    } catch (recordErr) {
-      logger.warn(`[WEBHOOK] Could not record trigger event: ${recordErr.message}`);
-      // Continue anyway - webhook still triggers
-    }
-    
-    // Trigger the job asynchronously (fire & forget) - don't await it
-    scheduler.runJob(jobName, 'webhook', null, webhookTriggerContext).catch(err => {
-      logger.error(`[WEBHOOK] Job [${jobName}] execution failed: ${err.message}`);
-    });
-    
-    // Return immediately with 202 Accepted + executionId before job completes
-    logger.info(`[WEBHOOK] Job [${jobName}] queued for execution with executionId [${executionId}]`);
-    return res.status(202).json({
-      success: true,
-      jobName,
-      executionId,
-      message: `Job triggered via webhook and queued for execution`,
-      statusUrl: `/rest/orchestration/executions/${executionId}`
-    });
-    
-  } catch (err) {
-    logger.error(`[WEBHOOK] Error processing webhook trigger: ${err.message}`);
-    res.status(500).json({ error: 'Webhook processing error: ' + err.message });
-  }
-}));
 
 // ============================================================================
 // WEBHOOK MANAGEMENT API (Authenticated)
@@ -1653,235 +940,43 @@ app.post('/api/webhook/trigger/:jobName', asyncHandler(async (req, res) => {
  * GET /rest/webhooks/:jobName
  * Get all webhooks for a job
  */
-app.get('/rest/webhooks/:jobName', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), asyncHandler(async (req, res) => {
-  try {
-    const { jobName } = req.params;
-    const webhooksData = require('./webhooksData.js');
-    
-    const webhooks = await webhooksData.getWebhooksForJob(jobName);
-    
-    // Return webhooks without exposing API keys
-    const safeWebhooks = webhooks.map(w => ({
-      id: w.id,
-      name: w.name,
-      description: w.description,
-      isActive: w.isActive,
-      createdAt: w.createdAt,
-      lastTriggeredAt: w.lastTriggeredAt,
-      triggerCount: w.triggerCount,
-      keyRotatedAt: w.keyRotatedAt
-    }));
-    
-    res.json(safeWebhooks);
-  } catch (err) {
-    logger.error(`[WEBHOOK API] Error fetching webhooks for [${req.params.jobName}]:`, err);
-    res.status(500).json({ error: err.message });
-  }
-}));
+
 
 /**
  * POST /rest/webhooks/:jobName
  * Create a new webhook for a job
  */
-app.post('/rest/webhooks/:jobName', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), express.json(), asyncHandler(async (req, res) => {
-  try {
-    const { jobName } = req.params;
-    const { name, description } = req.body;
-    const webhooksData = require('./webhooksData.js');
-    
-    if (!name || typeof name !== 'string' || name.trim().length === 0) {
-      return res.status(400).json({ error: 'Webhook name is required' });
-    }
-    
-    const webhook = await webhooksData.createWebhook(jobName, name.trim(), description || '');
-    
-    logger.info(`[WEBHOOK API] Webhook created for job [${jobName}] by user`);
-    
-    res.status(201).json({
-      success: true,
-      webhook: {
-        id: webhook.id,
-        name: webhook.name,
-        description: webhook.description,
-        apiKey: webhook.apiKey,  // Only return key on creation
-        isActive: webhook.isActive,
-        createdAt: webhook.createdAt
-      }
-    });
-  } catch (err) {
-    logger.error(`[WEBHOOK API] Error creating webhook for [${req.params.jobName}]:`, err);
-    res.status(500).json({ error: err.message });
-  }
-}));
+
 
 /**
  * PUT /rest/webhooks/:jobName/:webhookId
  * Update webhook (name, description, enable/disable)
  */
-app.put('/rest/webhooks/:jobName/:webhookId', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), express.json(), asyncHandler(async (req, res) => {
-  try {
-    const { jobName, webhookId } = req.params;
-    const { name, description, isActive } = req.body;
-    const webhooksData = require('./webhooksData.js');
-    
-    const updates = {};
-    if (name !== undefined) updates.name = name;
-    if (description !== undefined) updates.description = description;
-    if (isActive !== undefined) updates.isActive = isActive;
-    
-    const webhook = await webhooksData.updateWebhook(jobName, webhookId, updates);
-    
-    logger.info(`[WEBHOOK API] Webhook updated [${jobName}:${webhookId}] by user`);
-    
-    res.json({
-      success: true,
-      webhook: {
-        id: webhook.id,
-        name: webhook.name,
-        description: webhook.description,
-        isActive: webhook.isActive,
-        createdAt: webhook.createdAt
-      }
-    });
-  } catch (err) {
-    logger.error(`[WEBHOOK API] Error updating webhook [${req.params.jobName}:${req.params.webhookId}]:`, err);
-    res.status(500).json({ error: err.message });
-  }
-}));
+
 
 /**
  * POST /rest/webhooks/:jobName/:webhookId/rotate-key
  * Rotate webhook API key
  */
-app.post('/rest/webhooks/:jobName/:webhookId/rotate-key', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), express.json(), asyncHandler(async (req, res) => {
-  try {
-    const { jobName, webhookId } = req.params;
-    const { oldKey } = req.body;
-    const webhooksData = require('./webhooksData.js');
-    
-    // For authenticated users, oldKey verification is optional
-    // Since user is already in admin panel, additional verification not needed
-    const webhook = await webhooksData.rotateWebhookKey(jobName, webhookId, oldKey);
-    
-    logger.info(`[WEBHOOK API] Webhook key rotated [${jobName}:${webhookId}] by user`);
-    
-    res.json({
-      success: true,
-      webhook: {
-        id: webhook.id,
-        name: webhook.name,
-        apiKey: webhook.apiKey,  // Return new key
-        keyRotatedAt: webhook.keyRotatedAt
-      }
-    });
-  } catch (err) {
-    logger.error(`[WEBHOOK API] Error rotating webhook key [${req.params.jobName}:${req.params.webhookId}]:`, err);
-    res.status(500).json({ error: err.message });
-  }
-}));
+
 
 /**
  * DELETE /rest/webhooks/:jobName/:webhookId
  * Delete a webhook
  */
-app.delete('/rest/webhooks/:jobName/:webhookId', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), asyncHandler(async (req, res) => {
-  try {
-    const { jobName, webhookId } = req.params;
-    const webhooksData = require('./webhooksData.js');
-    
-    await webhooksData.deleteWebhook(jobName, webhookId);
-    
-    logger.info(`[WEBHOOK API] Webhook deleted [${jobName}:${webhookId}] by user`);
-    
-    res.json({
-      success: true,
-      message: `Webhook deleted successfully`
-    });
-  } catch (err) {
-    logger.error(`[WEBHOOK API] Error deleting webhook [${req.params.jobName}:${req.params.webhookId}]:`, err);
-    res.status(500).json({ error: err.message });
-  }
-}));
+
 
 /**
  * GET /rest/webhooks-all
  * Get all webhooks across all jobs
  */
-app.get('/rest/webhooks-all', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), asyncHandler(async (req, res) => {
-  try {
-    const webhooksData = require('./webhooksData.js');
-    const webhooks = await webhooksData.getAllWebhooks();
-    
-    // Return without exposing API keys
-    const safeWebhooks = webhooks.map(w => ({
-      id: w.id,
-      name: w.name,
-      description: w.description,
-      jobName: w.jobName,
-      isActive: w.isActive,
-      createdAt: w.createdAt,
-      lastTriggeredAt: w.lastTriggeredAt,
-      triggerCount: w.triggerCount,
-      keyRotatedAt: w.keyRotatedAt
-    }));
-    
-    res.json(safeWebhooks);
-  } catch (err) {
-    logger.error(`[WEBHOOK API] Error fetching all webhooks:`, err);
-    res.status(500).json({ error: err.message });
-  }
-}));
+
 
 /**
  * GET /rest/webhooks/stats
  * Get webhook statistics
  */
-app.get('/rest/webhooks-stats', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), asyncHandler(async (req, res) => {
-  try {
-    const webhooksData = require('./webhooksData.js');
-    const stats = await webhooksData.getWebhookStats();
-    res.json(stats);
-  } catch (err) {
-    logger.error(`[WEBHOOK API] Error getting webhook stats:`, err);
-    res.status(500).json({ error: err.message });
-  }
-}));
 
-app.delete('/rest/notifications', User.isAuthenticated, (req, res) => {
-  logger.info("Delete all notifications");
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  logger.info("Deleting all Notifications");
-  var resp ="";
-  try{
-    resp = notificationData.deleteAll();  
-  }
-  catch(err){
-    res.sendStatus(503);
-  }
-  logger.debug("all notifications deleted");
-  res.sendStatus(200);
-});
-
-app.delete('/rest/notifications/:index', User.isAuthenticated, (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  const index = req.params.index;
-  logger.info("Deleting Notification at index: " + index);
-  var resp ="";
-  try{
-    resp = notificationData.deleteItem(index);  
-  }
-  catch(err){
-    res.sendStatus(503);
-  }
-  logger.debug("notification at index [" + index + "] deleted");
-  res.sendStatus(200);
-});
 
 // ================================================================
 // RUNNING JOBS REST API - CRUD ENDPOINTS
@@ -1890,145 +985,22 @@ app.delete('/rest/notifications/:index', User.isAuthenticated, (req, res) => {
 /**
  * Get all running jobs
  */
-app.get('/rest/running', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), asyncHandler(async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-  logger.debug('Fetching all running jobs');
-  
-  const runningJobs = running.getItems();
-  res.json({ 
-    success: true, 
-    count: runningJobs.length,
-    jobs: runningJobs 
-  });
-}));
+
 
 /**
  * Delete a running job by index
  */
-app.delete('/rest/running/:index', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_EDIT), asyncHandler(async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-  const index = parseInt(req.params.index);
-  logger.info(`Deleting running job at index: ${index}`);
-  
-  try {
-    running.removeItemByIndex(index);
-    res.json({ success: true, message: `Running job at index ${index} removed` });
-  } catch (err) {
-    logger.error(`Failed to delete running job at index ${index}: ${err.message}`);
-    res.status(400).json({ success: false, message: `Error deleting running job: ${err.message}` });
-  }
-}));
+
 
 /**
  * Delete a running job by job name
  */
-app.delete('/rest/running/byName/:jobName', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_EDIT), asyncHandler(async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-  const jobName = req.params.jobName;
-  logger.info(`Deleting running job: ${jobName}`);
-  
-  try {
-    running.removeItem(jobName);
-    res.json({ success: true, message: `Running job [${jobName}] removed` });
-  } catch (err) {
-    logger.error(`Failed to delete running job [${jobName}]: ${err.message}`);
-    res.status(400).json({ success: false, message: `Error deleting running job: ${err.message}` });
-  }
-}));
+
 
 /**
  * Delete a running job by execution ID
  */
-app.delete('/rest/running/byExecutionId/:executionId', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_EDIT), asyncHandler(async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-  const executionId = req.params.executionId;
-  logger.info(`Deleting running job with executionId: ${executionId}`);
-  
-  try {
-    running.removeItemByExecutionId(executionId);
-    res.json({ success: true, message: `Running job with executionId [${executionId}] removed` });
-  } catch (err) {
-    logger.error(`Failed to delete running job with executionId [${executionId}]: ${err.message}`);
-    res.status(400).json({ success: false, message: `Error deleting running job: ${err.message}` });
-  }
-}));
 
-app.delete('/rest/running', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_EDIT), asyncHandler(async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-  logger.info('Deleting all running jobs');
-  
-  try {
-    const result = await running.deleteAll();
-    res.json({ success: true, message: `All running jobs deleted`, deletedCount: result.deletedCount });
-  } catch (err) {
-    logger.error(`Failed to delete all running jobs: ${err.message}`);
-    res.status(400).json({ success: false, message: `Error deleting running jobs: ${err.message}` });
-  }
-}));
-
-app.get('/rest/agent/:id', User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  const id = req.params.id;
-  logger.info("Getting Agent with ID: [" + id + "]");
-  var agent = agents.getAgent(id);
-  //var agent = agents.searchAgent(id);
-  //console.log("Agent is: " + agent);
-  res.setHeader("Content-Type","Application/JSON");
-  res.send(agent);  
-});
-
-app.get('/rest/agent/:id/ping', User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  const id = req.params.id;
-  logger.info("Pinging Agent with ID: " + id);
-  //notificationData.deleteItem(index);
-  pingIndividualRuntime(id);
-  res.setHeader("Content-Type","Application/JSON");
-  res.send('{"status":"ok"}');  
-});
-
-app.get('/rest/agents', User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  logger.info("Getting all agents");
-  const agentDict = agents.getDict();
-  res.setHeader("Content-Type","Application/JSON");
-  res.send(agentDict);  
-});
-
-app.get('/rest/settings/connection-enabled', User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  logger.info("Getting connection enabled setting");
-  const connectionEnabled = serverConfig.server.connectionEnabled === 'true';
-  res.setHeader("Content-Type","Application/JSON");
-  res.send({ connectionEnabled: connectionEnabled });  
-});
 
 // app.get('/rest/agent/:id/ping', User.isAuthenticated, (req, res) => {
 //   const user = req.session.user;
@@ -2050,717 +1022,13 @@ app.get('/rest/settings/connection-enabled', User.isAuthenticated, User.requireP
  * Supported types: cpu, mount_usage, dir_size, file_size, file_count, file_age
  * NOTE: This is a temporary test endpoint - remove once Rules Engine is built.
  */
-app.post('/rest/agent/:id/metric', User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), asyncHandler(async (req, res) => {
-  const { id } = req.params;
-  const { type, path: targetPath, pattern } = req.body;
 
-  if (!type) {
-    return res.status(400).json({ success: false, message: 'Missing required field: type' });
-  }
-
-  const agent = agents.getAgent(id);
-  if (!agent) {
-    return res.status(404).json({ success: false, message: `Agent [${id}] not found` });
-  }
-  if (agent.status === 'offline') {
-    return res.status(503).json({ success: false, message: `Agent [${id}] is currently offline` });
-  }
-
-  const crypto = require('crypto');
-  const jobName = `MetricQuery_${id}_${crypto.randomBytes(6).toString('hex')}`;
-  const metricConfig = { type };
-  if (targetPath) metricConfig.path = targetPath;
-  if (pattern) metricConfig.pattern = pattern;
-
-  logger.info(`[METRIC] Sending queryMetric [${type}] to agent [${id}] with jobName [${jobName}]`);
-
-  const agentMsgProcessor = require('./agentMessageProcessor.js');
-  const waitPromise = agentMsgProcessor.waitForMetricResult(jobName, 30000);
-
-  agentComms.sendCommand(id, mqttTransport.getCommandTopic(), 'queryMetric', JSON.stringify(metricConfig), jobName, undefined, false, null);
-
-  try {
-    const payload = await waitPromise;
-    
-    // Check if the agent returned an error (e.g., JSON parse failure)
-    if (payload.error) {
-      logger.error(`[METRIC] Agent [${payload.agent}] returned error for [${jobName}]: ${payload.error}`);
-      return res.status(400).json({ success: false, message: `Agent error: ${payload.error}` });
-    }
-    
-    logger.info(`[METRIC] Got result for [${jobName}]: ${JSON.stringify(payload.result)}`);
-    res.json({ success: true, agent: payload.agent, jobName, result: payload.result });
-  } catch (err) {
-    logger.error(`[METRIC] Query timed out or failed for [${jobName}]: ${err.message}`);
-    res.status(408).json({ success: false, message: err.message });
-  }
-}));
 
 /**
  * GET /metric-test.html  — Temporary test page for queryMetric exploration.
  * NOTE: Remove this page once the Rules Engine is built.
  */
-app.get('/metric-test.html', User.isAuthenticated, asyncHandler(async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/login.html');
-  }
-  const agentList = agents.getDict();
-  res.render('metrictest', {
-    version,
-    user,
-    agents: agentList,
-    csrf: req.csrfToken(),
-  });
-}));
 
-app.get('/rest/notifications', User.isAuthenticated, (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  var notifyObj = notificationData.getItems();
-  res.setHeader("Content-Type","Application/JSON");
-  res.send(notifyObj);
-  //res.sendStatus(200);
-});
-
-app.get('/rest/notifications/count', User.isAuthenticated, (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  var notifyCount = notificationData.getCount();
-  res.setHeader("Content-Type","Application/JSON");
-  res.send(`{"count":${notifyCount}}`);
-  //res.sendStatus(200);
-});
-
-app.get('/rest/notifty/test', User.isAuthenticated, (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  notifier.sendNotification("Test Notification","This is a test notification from Orchelium Server.","INFORMATION","/settings.html");
-  res.sendStatus(200);
-});
-
-app.get('/rest/mqtt/reconnect', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), async (req, res) => {
-  logger.info("Resetting MQTT connection")
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-
-  var resp = null;
-  try{
-    logger.debug("Initiating new MQTT Connection");
-    resp = await mqttTransport.startMqttConnectionProcess(true);
-    logger.warn("Response is: " + resp);
-    logger.debug("Initialized");
-    if(resp!==null &&resp=="ok") res.sendStatus(200);
-    else res.sendStatus(500);
-  }
-  catch (error){
-    logger.error("Error occurred connecting to MQTT",error);
-    res.sendStatus(500); 
-  }
-});
-
-app.get('/profile.html',User.isAuthenticated, async (req, res) => {
-  const user = req.session.user;
-  if (!user) return res.redirect('/register.html');
-  res.render('profile.ejs', { user, csrf: req.csrfToken() });
-});
-
-app.get('/about.html',User.isAuthenticated, async (req, res) => {
-
-  const user = req.session.user;
-  if (!user) return res.redirect('/register.html');
-
-  res.render('about.ejs', { 
-    user: User,
-    version: version,
-    csrf: req.csrfToken(),
-   });
-  
-});
-
-app.get('/docs.html', User.isAuthenticated, async (req, res) => {
-  res.redirect('/docs/');
-});
-
-app.get('/runList/data',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), asyncHandler(async (req, res) => {
-  var format = "json"
-  if(req.query.format !==undefined && req.query.format!=null)format = req.query.format;
-
-  var runningList = running.getItemsUsingTZ();
-  var schedules = scheduler.getSchedules();
-  
-  logger.debug(`[RunList] Retrieved ${runningList.length} running items from cache`);
-  runningList.forEach((item, idx) => {
-    logger.debug(`  [${idx}] jobName=${item.jobName}, executionId=${item.executionId}, orchestrationId=${item.orchestrationId}`);
-  });
-  
-  // Load orchestration definitions for icon/color lookup
-  let orchestrations = {};
-  try {
-    const orchestrationModule = require('./orchestration.js');
-    const allOrchestrations = await orchestrationModule.getAllJobs();
-    orchestrations = allOrchestrations;
-  } catch (err) {
-    logger.debug(`Could not load orchestrations for icon/color lookup: ${err.message}`);
-  }
-
-  for(var x=0;x<runningList.length;x++)
-  {
-    var workJob = runningList[x].jobName;
-    
-    // If this is an orchestration, fetch icon/color from orchestration definition
-    if (runningList[x].orchestrationId && orchestrations[runningList[x].orchestrationId]) {
-      const orchestrationJob = orchestrations[runningList[x].orchestrationId];
-      const currentVersionData = orchestrationJob.versions[orchestrationJob.versions.length - 1];
-      runningList[x].icon = orchestrationJob.icon || 'schema';
-      runningList[x].color = orchestrationJob.color || '#000000';
-    } else {
-      // For regular jobs, look up from schedules
-      for(var y=0;y<schedules.length;y++){
-        if(workJob == schedules[y].jobName){
-          runningList[x].icon=schedules[y].icon;
-          runningList[x].color=schedules[y].color;
-          break;
-        }
-      }
-    }
-  }
-
-  logger.debug(`[RunList] After enrichment: ${runningList.length} items`);
-  runningList.forEach((item, idx) => {
-    logger.debug(`  [${idx}] jobName=${item.jobName}, executionId=${item.executionId}, orchId=${item.orchestrationId}, icon=${item.icon}`);
-  });
-
-  if(format.toUpperCase()=="HTML"){
-    // Log orchestration running items for debugging
-    const orchestrationItems = runningList.filter(item => item.orchestrationId);
-    if (orchestrationItems.length > 0) {
-      logger.debug(`[RunList] Rendering ${orchestrationItems.length} orchestration items:`);
-      orchestrationItems.forEach(item => {
-        logger.debug(`  - Job: ${item.jobName}, OrchId: ${item.orchestrationId}, ExecId: ${item.executionId}`);
-      });
-    }
-    res.render('runningListData',{
-      runningList: runningList,
-      schedules: schedules,
-      csrf: req.csrfToken(),
-    });
-  }
-  else
-  {
-    var data={}
-    data.running=runningList;
-    data.schedules=schedules;
-    res.send(data)
-  }
-}));
-
-
-app.get('/historyList/data',User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_VIEW), async (req, res) => {
-
-  var format = "json"
-  if(req.query.format !==undefined && req.query.format!=null)format = req.query.format;
-
-  logger.info(`Format is ${format}`);
-  var historyList = await hist.getItemsGroupedByOrchestration();
-  var runningList = running.getItems();
-  var schedules = scheduler.getSchedules();
-
-  /*logger.debug(historyList);
-  logger.debug("----");
-  logger.debug(runningList);
-  logger.debug("----");
-  logger.debug(schedules);
-  logger.debug("----");*/
-  
-  // Apply icons and colors from schedules
-  function applyScheduleStyle(item) {
-    var workJob = item.jobName;
-    for(var y=0;y<schedules.length;y++){
-      if(workJob == schedules[y].jobName){
-        item.icon=schedules[y].icon;
-        item.color=schedules[y].color;
-        item.description=schedules[y].description;
-        break;
-      }
-    }
-    if(!item.icon ||  item.icon.trim()===''){
-      item.icon = item.isOrchestration ? "hub" : "remove_circle";
-      item.color = item.isOrchestration ? "#2196F3" : "#AAAAAA";
-    }
-  }
-  
-  // Pre-fetch orchestration success percentages to avoid N+1 queries
-  // Get all execution history once and compute percentages in-memory
-  let orchestrationSuccessMap = {};
-  try {
-    const allExecutions = await db.getData('ORCHESTRATION_EXECUTIONS');
-    if (allExecutions) {
-      for (const jobId in allExecutions) {
-        const executions = allExecutions[jobId] || [];
-        if (executions.length > 0) {
-          const successCount = executions.filter(e => e.finalStatus === 'success').length;
-          orchestrationSuccessMap[jobId] = Math.round((successCount / executions.length) * 100);
-        } else {
-          orchestrationSuccessMap[jobId] = '-';
-        }
-      }
-    }
-  } catch (err) {
-    logger.warn(`Error pre-fetching orchestration execution history: ${err.message}`);
-  }
-  
-  for(var x=0;x<historyList.length;x++)
-  {
-    applyScheduleStyle(historyList[x]);
-    
-    // Also apply styles to child nodes if this is an orchestration item
-    if (historyList[x].children) {
-      for (var c = 0; c < historyList[x].children.length; c++) {
-        applyScheduleStyle(historyList[x].children[c]);
-      }
-      
-      // Calculate total runtime from children for orchestration items
-      var totalRunTime = 0;
-      historyList[x].children.forEach(function(child) {
-        if (child.runTime) totalRunTime += parseInt(child.runTime) || 0;
-      });
-      historyList[x].runTime = totalRunTime;
-    }
-    
-    // Set default runTime if not present (for sorting)
-    if (historyList[x].runTime === undefined) {
-      historyList[x].runTime = 0;
-    }
-    
-    // Use pre-computed success percentage (calculated once before loop)
-    if (historyList[x].isOrchestration) {
-      historyList[x].successPercentage = orchestrationSuccessMap[historyList[x].jobId] || '-';
-    }
-  }
-
-  var refresh = req.query["refresh"];
-  if (refresh === undefined) refresh = 0;
-  const sort = req.query.sort || 'jobName'; // Default sorting by jobName
-  const order = req.query.order || 'asc'; // Default sorting order is ascending
-
-  logger.info("GetHistoryListData: " + sort + " " + order);
-  let sortedData;
-
-  // Note: getItemsGroupedByOrchestration already returns data sorted by date (newest first)
-  // Adjusting sort logic for grouped data
-  if (sort === 'jobName') {
-    sortedData = [...historyList].sort((a, b) => {
-      if (order === 'asc') {
-        return a.jobName.localeCompare(b.jobName);
-      } else {
-        return b.jobName.localeCompare(a.jobName);
-      }
-    });
-  } else if (sort === 'runDate') {
-    sortedData = [...historyList].sort((a, b) => {
-      const dateA = new Date(a.runDate);
-      const dateB = new Date(b.runDate);
-      return order === 'asc' ? dateA - dateB : dateB - dateA;
-    });
-  } else if (sort === 'runTime') {
-    sortedData = [...historyList].sort((a, b) => {
-      return order === 'asc' ? a.runTime - b.runTime : b.runTime - a.runTime;
-    });
-  } else if (sort === 'status') {
-    sortedData = [...historyList].sort((a, b) => {
-      return order === 'asc' ? a.returnCode - b.returnCode : b.returnCode - a.returnCode;
-    });
-  } else {
-    // Default sort already by newest first
-    sortedData = [...historyList];
-  }
- 
-  //var index=req.query.index;
-  //var redir=req.query.redir;
-
-  if(format.toUpperCase()=="HTML"){
-    res.render('historyListData',{
-      historyList: sortedData,
-      schedules: schedules,
-      sort: sort,
-      order: order,  
-      refresh: refresh,
-      csrf: req.csrfToken(),
-    });
-  }
-  else
-  {
-    var data={}
-    data.history=sortedData;
-    data.running=runningList;
-    data.schedules=schedules;
-    res.send(data)
-  }
-});
-
-app.delete('/rest/history/clear', User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_RESUBMIT), asyncHandler(async (req, res) => {
-  logger.info('Clearing all history items');
-  try {
-    await hist.clearHistory();
-    res.json({ 
-      success: true, 
-      message: 'History cleared successfully' 
-    });
-  } catch (err) {
-    logger.error('Error clearing history: ' + err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to clear history: ' + err.message 
-    });
-  }
-}));
-
-app.get('/history.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_VIEW), (req, res) => {
-
-  var refresh = req.query["refresh"];
-  if (refresh === undefined) refresh = 0;
-  const sort = req.query.sort || 'jobName'; // Default sorting by jobName
-  const order = req.query.order || 'asc'; // Default sorting order is ascending
-  
-  res.render('history',{
-    refresh: refresh,
-    sort:sort,
-    order:order,
-    csrf: req.csrfToken(),
-  });
-});
-
-app.get('/rest/script/:script', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_VIEW), (req, res) => {
-  const scriptFilename = req.params.script;
-  const mode = req.query.mode;
-  const scriptPath = `./scripts/${scriptFilename}`;
-
-  const baseDir = path.join(__dirname, 'scripts'); // Absolute base directory
-  const testPath = path.join(baseDir, scriptFilename);
-
-  // Check if the resolved path is within the base directory
-  if (!testPath.startsWith(baseDir)) {
-    return res.status(400).send('Invalid script filename');
-  }
-
-  // Validate filename format to match /saveScript behavior: alphanumeric, underscore, dot, hyphen, and .sh suffix
-  if (!scriptFilename.match(/^[a-zA-Z0-9_.-]+\.sh$/)) {
-    return res.status(400).send('Invalid script filename');
-  }
-
-  // Read the content of the script file
-  fs.readFile(scriptPath, 'utf8', (err, data) => {
-    if (err) {
-      return res.status(500).send('Error reading script file');
-    }
-
-    let beforeParams = '';
-    let htmlContent = '';
-    let afterParams = '';
-    let capturingBefore = true;
-    let capturingHtml = false;
-    let capturingAfter = false;
-
-    const lines = data.split('\n');
-    for (const line of lines) {
-      if (line.trim() === '#start-params') {
-        capturingBefore = false;
-        capturingHtml = true;
-        beforeParams += line + '\n'; // Add the marker to beforeParams
-        continue;
-      } else if (line.trim() === '#end-params') {
-        capturingHtml = false;
-        capturingAfter = true;
-        htmlContent += line + '\n'; // Add the marker to htmlContent
-        continue;
-      }
-
-      if (capturingBefore) {
-        beforeParams += line + '\n';
-      } else if (capturingHtml) {
-        htmlContent += line + '\n';
-      } else if (capturingAfter) {
-        afterParams += line + '\n';
-      }
-    }
-
-    console.log("Before #start-params:", beforeParams);
-    console.log("Between #start-params and #end-params (before sanitization):", htmlContent);
-    console.log("After #end-params:", afterParams);
-
-    // Sanitize only the HTML content between markers
-    let sanitizedHtml = sanitizeHtml(htmlContent, {
-      allowedTags: ['b', 'i', 'p', 'br'], // Only allow safe tags
-      disallowedTagsMode: 'discard', // Remove disallowed tags completely
-      allowedAttributes: {}, // No attributes allowed
-      selfClosing: ['br'], // Ensure self-closing tags like <br> are handled correctly
-      textFilter: function(text) {
-        return text; // No additional text filtering needed
-      },
-      // Explicitly disallow dangerous tags
-      disallowedTags: ['script', 'style', 'iframe', 'link', 'meta', 'object', 'embed', 'base', 'form', 'input'],
-    });
-
-    console.log("Sanitized HTML output:", sanitizedHtml);
-
-    // Combine sanitized HTML with the rest of the script, including the markers
-    let finalContent = beforeParams + sanitizedHtml + afterParams;
-
-    // Send the combined content
-    res.send(finalContent);
-  });
-});
-
-app.get('/rest/script/:scriptName/export', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_EXPORT), asyncHandler(async (req, res) => {
-  const scriptName = req.params.scriptName;
-  const scriptPath = getValidatedScriptPath(scriptName);
-
-  let scriptContent;
-  try {
-    scriptContent = await asyncUtils.readFileAsync(scriptPath, 'utf8');
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      throw new AppError('Script not found', 404);
-    }
-    throw new AppError(`Unable to read script [${scriptName}]`, 500);
-  }
-
-  const zipBuffer = await importExportManager.createScriptExportBuffer({
-    scriptName,
-    scriptContent
-  });
-
-  const safeName = importExportManager.toSafeFilenamePart(scriptName.replace(/\.sh$/i, ''), 'script');
-  const timestamp = importExportManager.getTimestampForFilename();
-  const exportFilename = `script-${safeName}-${timestamp}.zip`;
-
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="${exportFilename}"`);
-  res.send(zipBuffer);
-}));
-
-app.post('/rest/script/import', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_IMPORT), upload.single('importFile'), asyncHandler(async (req, res) => {
-  if (!req.file || !req.file.buffer) {
-    throw new AppError('Missing import file upload', 400);
-  }
-
-  let parsedImport;
-  try {
-    parsedImport = await importExportManager.parseScriptImportBuffer(req.file.buffer);
-  } catch (error) {
-    throw new AppError(`Script import validation failed: ${error.message}`, 400);
-  }
-
-  const existingScripts = refreshScripts().map((item) => item && item.data ? item.data.filename : null).filter(Boolean);
-  const resolvedName = importExportManager.resolveUniqueScriptFilename(parsedImport.scriptName, existingScripts);
-  const destinationPath = getValidatedScriptPath(resolvedName.finalName);
-  await asyncUtils.writeFileAsync(destinationPath, parsedImport.scriptContent);
-
-  logger.info(`Script imported successfully as [${resolvedName.finalName}]`);
-  res.json({
-    success: true,
-    importedType: 'script',
-    originalName: parsedImport.scriptName,
-    scriptName: resolvedName.finalName,
-    renamed: resolvedName.renamed,
-    warnings: resolvedName.renamed ? ['Script name already existed and was auto-renamed.'] : []
-  });
-}));
-
-app.get('/rest/script-test/:executionId', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_TEST), asyncHandler(async (req, res) => {
-  const execution = scriptTestManager.getExecution(req.params.executionId);
-  if (!execution) {
-    res.status(404).json({ success: false, error: 'Test execution not found or expired' });
-    return;
-  }
-
-  res.json({ success: true, execution });
-}));
-
-app.post('/rest/script-test/state', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_TEST), asyncHandler(async (req, res) => {
-  scriptTestManager.cleanupExpiredTests();
-
-  const scriptName = req.body.scriptName || null;
-  const sourceType = req.body.sourceType === 'saved' ? 'saved' : 'editor';
-  const scriptSource = typeof req.body.scriptContent === 'string' ? req.body.scriptContent : '';
-
-  if (sourceType === 'saved' && !scriptName) {
-    res.status(400).json({ success: false, error: 'Saved script lookup requires a script name' });
-    return;
-  }
-
-  if (sourceType !== 'saved' && !scriptName && (!scriptSource || scriptSource.trim().length === 0)) {
-    res.status(400).json({ success: false, error: 'Editor lookup requires script content or a script name' });
-    return;
-  }
-
-  const scriptIdentity = scriptTestManager.buildScriptIdentity({
-    scriptName,
-    scriptSource,
-    sourceType,
-  });
-  const blockingState = scriptTestManager.getBlockingState(scriptIdentity);
-
-  res.json({
-    success: true,
-    scriptIdentity,
-    state: blockingState,
-  });
-}));
-
-app.post('/rest/script-test/start', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_TEST), asyncHandler(async (req, res) => {
-  scriptTestManager.cleanupExpiredTests();
-
-  const agentName = req.body.agentName;
-  const scriptName = req.body.scriptName || null;
-  let scriptDescription = typeof req.body.scriptDescription === 'string' ? req.body.scriptDescription : '';
-  const sourceType = req.body.sourceType === 'saved' ? 'saved' : 'editor';
-  const commandParams = String(req.body.commandParams || '');
-  let scriptSource = typeof req.body.scriptContent === 'string' ? req.body.scriptContent : '';
-
-  if (!agentName) {
-    res.status(400).json({ success: false, error: 'Agent is required' });
-    return;
-  }
-
-  const agent = agents.getAgent(agentName);
-  if (!agent) {
-    res.status(404).json({ success: false, error: `Agent [${agentName}] not found` });
-    return;
-  }
-
-  if (agent.status === 'offline') {
-    res.status(409).json({ success: false, error: `Agent [${agentName}] is offline` });
-    return;
-  }
-
-  if (sourceType === 'saved') {
-    if (!scriptName) {
-      res.status(400).json({ success: false, error: 'Saved script tests require a script name' });
-      return;
-    }
-
-    scriptSource = await readSavedScript(scriptName);
-    scriptDescription = scriptDescription || parseScriptDescriptionFromContent(scriptSource);
-  } else if (!scriptSource || scriptSource.trim().length === 0) {
-    res.status(400).json({ success: false, error: 'Editor tests require script content' });
-    return;
-  } else {
-    scriptDescription = scriptDescription || parseScriptDescriptionFromContent(scriptSource);
-  }
-
-  const executionId = crypto.randomBytes(8).toString('hex');
-  const createResult = scriptTestManager.createTest({
-    executionId,
-    agentName,
-    scriptName,
-    scriptDescription,
-    scriptSource,
-    sourceType,
-    commandParams,
-    requestedBy: getScriptTestRequestedBy(req),
-  });
-
-  if (!createResult.ok) {
-    res.status(409).json({
-      success: false,
-      code: createResult.type === 'active' ? 'ACTIVE_TEST_EXISTS' : 'UNSEEN_RETAINED_RESULT',
-      execution: createResult.execution,
-      scriptIdentity: createResult.scriptIdentity,
-    });
-    return;
-  }
-
-  const execution = createResult.execution;
-  agentComms.sendCommand(
-    agentName,
-    'execute/scriptTest',
-    scriptSource,
-    commandParams,
-    execution.jobName,
-    undefined,
-    true,
-    execution.executionId,
-    null,
-    {},
-    null,
-    {
-      executionMode: 'test',
-      scriptName: execution.scriptName,
-      scriptIdentity: execution.scriptIdentity,
-      sourceType: execution.sourceType,
-      scriptLabel: execution.scriptLabel,
-    }
-  );
-
-  res.json({ success: true, execution });
-}));
-
-app.post('/rest/script-test/:executionId/acknowledge', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_TEST), asyncHandler(async (req, res) => {
-  const execution = scriptTestManager.acknowledgeExecution(req.params.executionId);
-  if (!execution) {
-    res.status(404).json({ success: false, error: 'Test execution not found or expired' });
-    return;
-  }
-
-  res.json({ success: true, execution });
-}));
-
-app.post('/rest/script-test/:executionId/discard', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_TEST), asyncHandler(async (req, res) => {
-  const discarded = scriptTestManager.discardExecution(req.params.executionId);
-  if (!discarded) {
-    res.status(409).json({ success: false, error: 'Unable to discard active or missing test execution' });
-    return;
-  }
-
-  res.json({ success: true });
-}));
-
-app.post('/rest/script-test/:executionId/terminate', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_TEST), asyncHandler(async (req, res) => {
-  const execution = scriptTestManager.getExecution(req.params.executionId);
-  if (!execution) {
-    res.status(404).json({ success: false, error: 'Test execution not found or expired' });
-    return;
-  }
-
-  if (!execution.isActive) {
-    res.status(409).json({ success: false, error: 'Test execution is no longer active' });
-    return;
-  }
-
-  scriptTestManager.requestTermination(req.params.executionId, getScriptTestRequestedBy(req));
-  agentComms.sendCommand(
-    execution.agentName,
-    'execute/terminateScriptTest',
-    'terminateExecution',
-    req.params.executionId,
-    execution.jobName,
-    undefined,
-    true,
-    req.params.executionId,
-    null,
-    {},
-    null,
-    {
-      executionMode: 'test',
-      scriptName: execution.scriptName,
-      scriptIdentity: execution.scriptIdentity,
-      sourceType: execution.sourceType,
-      scriptLabel: execution.scriptLabel,
-    }
-  );
-
-  res.json({ success: true, execution: scriptTestManager.getExecution(req.params.executionId) });
-}));
 
 async function getScriptUsageEntries(scriptName) {
   const allSchedules = scheduler.getSchedules();
@@ -2804,1294 +1072,8 @@ async function getScriptUsageEntries(scriptName) {
   return formattedJobs;
 }
 
-app.get('/rest/jobs-for-script/:scriptName', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_VIEW), asyncHandler(async (req, res) => {
-  try {
-    const scriptName = req.params.scriptName;
-    if (!SCRIPT_FILENAME_REGEX.test(scriptName)) {
-      return res.status(400).json({ success: false, error: 'Invalid script filename' });
-    }
-
-    const usageEntries = await getScriptUsageEntries(scriptName);
-
-    res.json({
-      success: true,
-      script: scriptName,
-      jobs: usageEntries,
-      count: usageEntries.length
-    });
-  } catch (err) {
-    logger.error('Error fetching jobs for script:', err.message);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch jobs for script: ' + err.message
-    });
-  }
-}));
-
-app.delete('/rest/script/:scriptName', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_DELETE), asyncHandler(async (req, res) => {
-  const scriptName = req.params.scriptName;
-  const csrfToken = req.headers['x-csrf-token'];
-
-  if (!csrfToken || csrfToken !== req.session.csrfToken) {
-    return res.status(403).json({ success: false, error: 'CSRF token validation failed' });
-  }
-
-  if (!SCRIPT_FILENAME_REGEX.test(scriptName)) {
-    return res.status(400).json({ success: false, error: 'Invalid script filename' });
-  }
-
-  const usageEntries = await getScriptUsageEntries(scriptName);
-  if (usageEntries.length > 0) {
-    return res.status(409).json({
-      success: false,
-      error: 'Script is currently used by jobs or orchestrations',
-      jobs: usageEntries,
-      count: usageEntries.length
-    });
-  }
-
-  const scriptPath = getValidatedScriptPath(scriptName);
-
-  try {
-    await fs.promises.unlink(scriptPath);
-    logger.info(`Script deleted successfully: ${scriptName}`);
-    return res.json({ success: true, script: scriptName });
-  } catch (err) {
-    if (err && err.code === 'ENOENT') {
-      return res.status(404).json({ success: false, error: 'Script not found' });
-    }
-    logger.error(`Error deleting script [${scriptName}]: ${err.message}`);
-    return res.status(500).json({ success: false, error: 'Failed to delete script' });
-  }
-}));
-
-app.get('/delete-schedule.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_DELETE), (req, res) => {
-  logger.warn("Deleting Schedule*******************");
-  var jobName=req.query.jobName;
-  var redir=req.query.redir;
-  logger.info("Deleting Schedule with jobName: " + jobName);
-  scheduler.deleteSchedule(jobName);
-  logger.debug("schedule deleted");
-  if(redir!==undefined && redir!==null) {
-    res.redirect(redir + (redir.includes('?') ? '&' : '?') + "message=Deleted+schedule: " + jobName);
-  } else {
-    res.redirect("/scheduleList.html?message=Deleted+schedule: " + jobName);
-  }
-});
-
-
-app.get('/scriptEditor.html',User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.SCRIPTS_CREATE, PERMISSIONS.SCRIPTS_EDIT]), (req, res) => {
-  //refresh the scripts list
-  var scriptsMeta = refreshScripts();
-  var scriptToEdit=req.query.index;
-
-  var templateData = undefined;
-  if(serverConfig.templates.enabled=="true")templateData=templates;
-  res.render('scripteditor',{
-    scripts: scriptsMeta,
-    agents: agents.getDict(),
-    scriptTestAgentsBase64: buildScriptTestAgentsBase64(),
-    templates: templateData,
-    scriptToEdit: scriptToEdit,
-    csrf: req.csrfToken(),
-  });
-});
-
-app.get('/scheduler.html',User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.JOBS_CREATE, PERMISSIONS.JOBS_EDIT]), async (req, res) => {
-  logger.info("Scheduler.html");
-  var index=req.query.index;
-  var copyIndex=req.query.copyIndex;
-  var internal=req.query.internal;
-  var jobname=req.query.jobname;
-  var redir=req.query.redir;
-  var time=req.query.time;
-  var day=req.query.day;
-  var type=req.query.type;
-  var copy = false;
-  if(copyIndex!==undefined && copyIndex!==null){
-    index = copyIndex;
-    copy = true;    
-  }
- 
-  if(index===undefined || index === null )index = scheduler.getScheduleIndex(jobname);
-  var scheduleItem = scheduler.getSchedules(index);
- 
-  if(copy){
-    scheduleItem = JSON.parse(JSON.stringify(scheduleItem));
-    scheduleItem.index=undefined;
-    index = undefined;
-    scheduleItem.jobName = "Copy of " + scheduleItem.jobName;
-  };
-  //refresh the scripts list
-  var scriptsMeta = refreshScripts();
-  var scripts = [];
-  var scriptsDesc =[];
-
-  for(var x=0;x<scriptsMeta.length;x++){
-    scripts.push(scriptsMeta[x].data.filename);
-    scriptsDesc.push(scriptsMeta[x].data.metaDescription);
-  }
-
-  //Get the schedule
-  let orchestrations = {};
-  try {
-    orchestrations = await orchestration.getAllJobs() || {};
-  } catch (err) {
-    logger.debug('Unable to fetch orchestrations for scheduler:', err.message);
-  }
-
-  res.render('scheduler',{
-    scripts: scripts,
-    scriptsDesc: scriptsDesc,
-    agents: agents.getDict(),
-    schedule: scheduleItem,
-    copy:copy,
-    index:index,
-    csrf: req.csrfToken(),  
-    redir:redir,
-    type:type,
-    day:day,
-    time:time,
-    icons:serverConfig.job_icons,
-    internal: internal,
-    orchestrations: orchestrations
-  });
-});
-
-
-app.get('/scheduleInfo/data/name',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), async(req, res) => {
-  const user = req.session.user;
-  
-  if (!user) {
-   
-    return res.redirect('/register.html?not+authenticated');
-  }
-  
-  const jobname=req.query.jobname;
-  const executionId = req.query.executionId;  // Optional: look up specific execution
-  var index = scheduler.getScheduleIndex(jobname);
-  var data = await getSchedulerData(index, executionId);
-  res.setHeader("Content-Type","Application/JSON");
-  res.send(data);
-});
-
-app.get('/scheduleInfo/data/:index',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), async(req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html?not+authenticated');
-  }
-
-  const index = req.params.index;
-  const executionId = req.query.executionId;  // Optional: look up specific execution
-  
-  var data = await getSchedulerData(index, executionId);
-  
-  res.setHeader("Content-Type","Application/JSON");
-  res.send(data);
-});
-
-
-app.get('/scheduleInfo.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), async(req, res) => {
-  var index=req.query.index;
-  var redir=req.query.redir;
-  var jobname=req.query.jobname;
-
-  if(jobname!==undefined && jobname !==null && jobname.length>0){
-    //Find the index from the name
-    logger.debug("Getting Sechedule for: " + jobname);
-    index = scheduler.getScheduleIndex(jobname);
-    logger.debug("Found job at index: " + index);
-  }
-
-  var refresh = req.query["refresh"];
-  if (refresh === undefined) refresh = 0;
-  var schedule = scheduler.getSchedules(index);
-
-  //return logEvent.name + "_" + logEvent.jobName + "_" + type;
-  var key1 = schedule.agent + "_" + schedule.jobName + "_" + "stats";
-  var key2 = schedule.agent + "_" + schedule.jobName + "_" + "log";
-
-  var stats = null;
-  var log = null;
-  try {
-    stats = await db.simpleGetData(key1);
-    log = await db.simpleGetData(key2);
-  }
-  catch(err){
-     logger.warn("Unable to find stats/log data");
-     logger.warn(JSON.stringify(err));
-  }
-
-  if(stats!=null){
-    stats.current.etaDisplay = dateTimeUtils.displaySecs(stats.current.eta);
-    stats.etaRollingAvgDisplay = dateTimeUtils.displaySecs(stats.etaRollingAvg);
-  }
-  else{
-    if(stats !== undefined && stats!==null && (stats.etaRollingAvg == undefined || stats.etaRollingAvg ==null)) stats.etaRollingAvg=0;
-  }
-
-  res.render('scheduleInfo',{
-    //scripts: scripts,
-    agent: agents.getAgent(schedule.agent),
-    schedule: schedule,
-    index:index,
-    redir:redir,
-    stats:stats,
-    csrf: req.csrfToken(),
-    log:log,
-    refresh,refresh,
-    hist:hist,
-  });  
-});
-
-
-
-app.post('/scheduler.html', validateCsrf, User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.JOBS_CREATE, PERMISSIONS.JOBS_EDIT]), asyncHandler(async (req, res) => {
-  
-  let { jobName, colour, description, scheduleType, scheduleTime, dayOfWeek,
-    dayInMonth, agentselect, agentcommand, commandparams, index, redir, icon, scheduleMode, orchestrationId,
-    // Rule trigger fields
-    triggerType,
-    ruleMetricAgent, ruleMetricType, ruleMetricPath, ruleMetricPattern,
-    ruleConditionOperator, ruleConditionThreshold,
-    rulePollIntervalMins, ruleCooldownMins,
-    disabled
-  } = req.body;
-    jobName = sanitizeHtml(jobName);
-    colour = sanitizeHtml(colour);
-
-    // Normalize and validate scheduleMode to allow-list
-    scheduleMode = scheduleMode === 'orchestration' ? 'orchestration' : 'classic';
-
-    // Normalize and validate triggerType to allow-list
-    const allowedTriggerTypes = ['rule', 'webhook'];
-    triggerType = allowedTriggerTypes.includes(triggerType) ? triggerType : 'clock';
-
-    // Sanitize orchestrationId
-    if (orchestrationId) {
-      orchestrationId = sanitizeHtml(orchestrationId);
-    }
-
-    // Build rule config objects when triggerType is 'rule'
-    let ruleMetric = null;
-    let ruleCondition = null;
-    if (triggerType === 'rule') {
-      if (!ruleMetricAgent || !ruleMetricType || !ruleConditionOperator || ruleConditionThreshold === undefined) {
-        return res.status(400).send('Error: Agent, metric type, operator, and threshold are required for rule-based jobs');
-      }
-      const allowedMetricTypes = ['cpu', 'mount_usage', 'dir_size', 'file_size', 'file_count', 'file_age'];
-      const allowedOperators = ['>', '>=', '<', '<=', '==', '!='];
-      if (!allowedMetricTypes.includes(ruleMetricType)) {
-        return res.status(400).send('Error: Invalid metric type');
-      }
-      if (!allowedOperators.includes(ruleConditionOperator)) {
-        return res.status(400).send('Error: Invalid condition operator');
-      }
-      ruleMetric = {
-        agent: sanitizeHtml(ruleMetricAgent),
-        type: ruleMetricType,
-        path: ruleMetricPath ? sanitizeHtml(ruleMetricPath) : null,
-        pattern: ruleMetricPattern ? sanitizeHtml(ruleMetricPattern) : null,
-      };
-      
-      // Validate and parse ruleConditionThreshold
-      const parsedThreshold = parseFloat(ruleConditionThreshold);
-      if (isNaN(parsedThreshold) || !isFinite(parsedThreshold)) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Error: Threshold must be a valid finite number' 
-        });
-      }
-      ruleCondition = {
-        operator: ruleConditionOperator,
-        threshold: parsedThreshold,
-      };
-      
-      // Validate and parse rulePollIntervalMins
-      const pollInterval = parseInt(rulePollIntervalMins, 10);
-      if (isNaN(pollInterval) || pollInterval < 1) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Error: Poll interval must be a positive integer (minimum 1 minute)' 
-        });
-      }
-      rulePollIntervalMins = pollInterval;
-      
-      // Validate and parse ruleCooldownMins
-      const cooldown = parseInt(ruleCooldownMins, 10);
-      if (isNaN(cooldown) || cooldown < 1) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Error: Cooldown must be a positive integer (minimum 1 minute)' 
-        });
-      }
-      ruleCooldownMins = cooldown;
-      
-      // Rule jobs have no clock schedule
-      scheduleType = null;
-      scheduleTime = null;
-    }
-
-    // Validate based on schedule mode
-    if (scheduleMode === 'orchestration') {
-      if (!orchestrationId || orchestrationId.length === 0) {
-        return res.status(400).send('Error: Orchestration ID is required for orchestration schedules');
-      }
-      else{
-        const job = await orchestration.getJob(orchestrationId);
-        icon = job.icon;
-        colour = job.color;
-      }
-    } else {
-      // Classic mode validation
-      if (!agentselect || agentselect.length === 0) {
-        return res.status(400).send('Error: Agent is required for classic schedules');
-      }
-    }
-
-    const hasDisabledField = Object.prototype.hasOwnProperty.call(req.body, 'disabled');
-    const disabledFlag = hasDisabledField ? (disabled === true || disabled === 'true') : undefined;
-
-    scheduler.upsertSchedule(index, jobName, colour, description, scheduleType, scheduleTime, dayOfWeek,
-      dayInMonth, agentselect, agentcommand, commandparams, icon, scheduleMode, orchestrationId,
-      triggerType, ruleMetric, ruleCondition, rulePollIntervalMins, ruleCooldownMins, disabledFlag);
-
-  if(redir===undefined || redir === null || redir.length<=0)redir="/scheduleList.htm";
-  res.redirect(redir);
-}));
-
-app.get('/scheduleList.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), asyncHandler(async (req, res) => {
-  //console.time('getSchedules');
-  const schedules = scheduler.getSchedules();
-  //console.timeEnd('getSchedules');
-  //console.time('getHitstItems');
-  const items = hist.getItemsUsingTZ();
-  //console.timeEnd('getHitstItems');
-
-  const lastRuns = {};
-  for (let i = items.length - 1; i >= 0; i--) {
-      const item = items[i];
-      if (!lastRuns[item.jobName]) { // Only set if not already found (first from end = last run)
-          lastRuns[item.jobName] = item;
-      }
-  }
-
-  // Pre-fetch orchestration executions once so orchestration schedule rows can
-  // use latest execution state for row highlighting.
-  let orchestrationExecutions = {};
-  try {
-    orchestrationExecutions = await db.getData('ORCHESTRATION_EXECUTIONS');
-  } catch (err) {
-    orchestrationExecutions = {};
-  }
-
-  // Enhance schedules with precomputed lastRun
-  const processedSchedules = await Promise.all(schedules.map(async (schedule) => {
-      let successPercentage;
-      let returnCode = lastRuns[schedule.jobName] ? lastRuns[schedule.jobName].returnCode : '0';
-
-      if (schedule.scheduleMode === 'orchestration' && schedule.orchestrationId) {
-        successPercentage = await hist.getOrchestrationSuccessPercentage(schedule.orchestrationId);
-
-        const executions = orchestrationExecutions[schedule.orchestrationId] || [];
-        if (executions.length > 0) {
-          const latestExecution = executions[executions.length - 1];
-          returnCode = latestExecution.finalStatus === 'success' ? '0' : '1';
-        }
-      } else {
-        successPercentage = hist.getSuccessPercentage(schedule.jobName);
-      }
-
-      return {
-        ...schedule,
-        returnCode: returnCode,
-        successPercentage: successPercentage
-      };
-  }));
-
-  //console.time('render');
-  res.render('scheduleList', {
-    schedules: processedSchedules,
-    hist:hist,
-    csrf: req.csrfToken(), 
-  });
-  //console.timeEnd('render');
-}));
-
-app.get('/scheduleListCalendar.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), (req, res) => {
-  const schedules = scheduler.getSchedules();
-  viewType = req.query.viewType;
-  inDate = req.query.inDate;
-  if(viewType === undefined || viewType === null)viewType="weekly";
-  res.render('scheduleListCalendar', {
-    schedules: schedules,
-    inViewType: viewType,
-    inDate: inDate,
-    csrf: req.csrfToken(),
-  });
-});
-
-app.get('/runSchedule.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), asyncHandler(async (req, res) => {
-  var index=req.query.index;
-  var jobname=req.query.jobname;
-  var redir=req.query.redir;
-  var rerunFrom=req.query.rerunFrom;  // NEW: Track which failed execution prompted this re-run
-  logger.info(`Running Schedule - Index: ${index ?? 'undefined'}, Jobname: ${jobname ?? 'undefined'}, RerunFrom: ${rerunFrom ?? 'undefined'}`);
-  
-  if(redir===undefined || redir === null || redir.length<=0)redir="/scheduleInfo.html?index=" + index + "&refresh=3";
-  
-  let errorMessage = null;
-  
-  // Get the schedule - either by index or by jobname
-  const schedules = scheduler.getSchedules();
-  let schedule = null;
-  
-  if (index !== undefined && index !== null) {
-    schedule = schedules[index];
-  }
-  
-  // If not found by index, look up by jobname
-  if (!schedule && jobname) {
-    schedule = scheduler.getSchedule(jobname);
-  }
-  
-  // Handle orchestration mode
-  if (schedule && schedule.scheduleMode === 'orchestration') {
-    try {
-      const orchestrationId = schedule.orchestrationId;
-      if (!orchestrationId) {
-        errorMessage = "Orchestration not configured for this schedule";
-      } else {
-        // Generate execution ID immediately (same as orchestrationEngine does)
-        const crypto = require('crypto');
-        const executionId = crypto.randomBytes(8).toString('hex');
-        
-        // Create a stub execution record (NOT saved to permanent history yet)
-        // This is cached in-memory so monitor can find it immediately
-        const stubExecution = {
-          jobId: orchestrationId,
-          executionId: executionId,
-          orchestrationVersion: 1,
-          startTime: new Date().toISOString(),
-          endTime: null,
-          status: 'running',
-          currentNode: null,
-          visitedNodes: [],
-          scriptOutputs: {},
-          conditionEvaluations: {},
-          nodeMetrics: {},
-          errors: [],
-          finalStatus: null,
-          manual: true,
-          isStub: true,  // Mark as temporary stub execution
-          rerunFrom: rerunFrom || null  // Track if this is a rerun
-        };
-        
-        // Cache the stub in-memory (not in permanent history)
-        saveInProgressExecution(orchestrationId, executionId, stubExecution);
-        logger.info(`Created in-progress execution for [${orchestrationId}] with ID [${executionId}]`);
-        
-        // Get the orchestration job to get its name for the running queue
-        let orchestrationName = orchestrationId; // fallback to orchestrationId
-        try {
-          const job = await orchestration.getJob(orchestrationId);
-          if (job && job.name) {
-            orchestrationName = job.name;
-          }
-        } catch (err) {
-          logger.warn(`Could not get orchestration name for [${orchestrationId}]: ${err.message}`);
-        }
-        
-        // Add to running queue so it shows in running list with link to monitor
-        // Note: Orchestrations span multiple agents, so we pass null for agentName (concurrency not enforced per-agent)
-        const runningItem = running.createItem(orchestrationName, new Date().toISOString(), 'manual', executionId, null);
-        runningItem.orchestrationId = orchestrationId;
-        running.add(runningItem);
-        logger.info(`Added orchestration to running queue: [${orchestrationName}] with execution [${executionId}]`);
-        
-        // Create callback to update cache as nodes complete
-        const onNodeComplete = (executionLog) => {
-          updateInProgressExecution(orchestrationId, executionId, executionLog);
-        };
-        
-        // Start orchestration execution asynchronously (fire-and-forget)
-        // Pass executionId so engine uses the same ID for websocket events
-        // Pass onNodeComplete callback to update cache as nodes complete
-        // Don't await - redirect immediately so user sees monitor view right away
-        orchestration.executeJob(orchestrationId, true, executionId, onNodeComplete, null, rerunFrom).then(async (executionLog) => {
-          updateInProgressExecution(orchestrationId, executionId, executionLog);
-          // Execute in background, save results when complete
-          try {
-            await orchestration.saveExecutionResult(executionLog);
-            // If this was a re-run, mark the original execution as having been re-run
-            if (rerunFrom) {
-              await hist.markAsRerun(rerunFrom);
-            }
-          } catch (saveErr) {
-            logger.error(`Failed to save execution result for orchestration [${orchestrationId}]: ${saveErr.message}`);
-          }
-          // Clear the stub from cache - actual execution is now in history
-          clearInProgressExecution(orchestrationId, executionId);
-          // Remove from running queue by executionId for consistency with REST endpoint
-          running.removeItemByExecutionId(executionId);
-          logger.info(`Orchestration [${orchestrationId}] execution completed with status: ${executionLog.finalStatus}`);
-        }).catch((err) => {
-          logger.error(`Background orchestration execution failed: ${err.message}`);
-          // Try to retrieve execution log from cache to save to history
-          const inProgressExecution = getInProgressExecution(orchestrationId, executionId);
-          if (inProgressExecution) {
-            // Mark as failed if not already marked
-            if (!inProgressExecution.status || inProgressExecution.status === 'running') {
-              inProgressExecution.status = 'failed';
-              inProgressExecution.finalStatus = 'error';
-            }
-            inProgressExecution.endTime = new Date().toISOString();
-            if (!inProgressExecution.errors) {
-              inProgressExecution.errors = [];
-            }
-            inProgressExecution.errors.push({ message: err.message });
-            // Save to history even on error
-            orchestration.saveExecutionResult(inProgressExecution).catch((saveErr) => {
-              logger.error(`Failed to save failed execution result for orchestration [${orchestrationId}]: ${saveErr.message}`);
-            });
-          }
-          // Clear the stub on error too
-          clearInProgressExecution(orchestrationId, executionId);
-          // Remove from running queue on error by executionId
-          running.removeItemByExecutionId(executionId);
-        });
-        
-        // Redirect to monitor view immediately with the execution ID
-        redir = `/orchestration/monitor.html?jobId=${encodeURIComponent(orchestrationId)}&executionId=${encodeURIComponent(executionId)}`;
-      }
-    } catch (err) {
-      logger.error(`Error starting orchestration: ${err.message}`);
-      errorMessage = `Failed to start orchestration: ${err.message}`;
-    }
-  } else {
-    // Classic mode: Check if agent is reachable and under concurrency limit
-    if (schedule && schedule.scheduleMode !== 'orchestration') {
-      const agent = agents.getAgent(schedule.agent);
-      
-      if (agent) {
-        if (agent.status === 'offline') {
-          errorMessage = `Agent '${schedule.agent}' is offline - cannot execute job`;
-        } else {
-          const concurrencyLimit = agents.getConcurrency(schedule.agent);
-          const runningCount = running.getRunningCountForAgent(schedule.agent);
-          if (runningCount >= concurrencyLimit) {
-            errorMessage = `Agent '${schedule.agent}' is at concurrency limit (${runningCount}/${concurrencyLimit})`;
-          }
-        }
-      } else {
-        errorMessage = `Agent '${schedule.agent}' does not exist`;
-      }
-    }
-    
-    // Only attempt to run if no pre-check errors
-    if (!errorMessage) {
-      logger.info(`About to call manualJobRun with index=${index}, jobname=${jobname}, rerunFrom=${rerunFrom ?? 'undefined'}`);
-      var result = await scheduler.manualJobRun(index, jobname, rerunFrom);
-      logger.info(`Job execution result: ${JSON.stringify(result)}`)
-      if(result && result.status !== "ok") {
-        errorMessage = "Job execution failed";
-        logger.error(`Classic job execution failed - result: ${JSON.stringify(result)}`);
-      } else if (result && result.executionId) {
-        // If this is a re-run, mark the original execution as having been re-run
-        if (rerunFrom) {
-          await hist.markAsRerun(rerunFrom);
-        }
-        logger.info(`Adding executionId to URL: ${result.executionId}`);
-        // Add executionId to redirect URL for classic jobs
-        redir += (redir.includes('?') ? '&' : '?') + 'executionId=' + encodeURIComponent(result.executionId);
-        logger.info(`Final redirect URL: ${redir}`);
-      } else {
-        logger.warn(`No executionId in result: ${JSON.stringify(result)}`);
-      }
-    }
-  }
-  
-  if(errorMessage) {
-    logger.info(`Job failed: ${errorMessage}`);
-    const separator = redir.includes('?') ? '&' : '?';
-    const encodedMsg = encodeURIComponent(errorMessage);
-    redir += separator + "message=" + encodedMsg;
-  }
-  logger.info(`Final redir URL before redirect: ${redir}`);
-  res.redirect(redir);
-}));
-
-app.get('/edit/:index',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_EDIT), (req, res) => {
-  const index = req.params.index;
-  const schedules = scheduler.getSchedules();
-  const schedule = schedules[index];
-
-  res.render('scheduler', { 
-    schedules, 
-    index,
-    scripts: scripts,
-    agents: agents.getDict(), 
-    csrf: req.csrfToken(),
-  });
-});
-
-app.post('/edit/:index', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_EDIT), (req, res) => {
-  const index = req.params.index;
-  const schedules = scheduler.getSchedules();
-  const schedule = schedules[index];
-
-  schedule.jobName = req.body.jobName;
-  schedule.scheduleType = req.body.scheduleType;
-  schedule.scheduleTime = req.body.scheduleTime;
-
-  //writeSchedules(schedules);
-
-  res.redirect('/schedules');
-});
-
-app.get('/rest/jobs',User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), (req, res) => {
-  //populateBackupConfig();
-  res.header('Content-type', 'application/json');
-  res.send(JSON.stringify(config, null, "  "));
-});
-
-app.get('/',User.isAuthenticated, async (request, response) => {
-
-  var historyList = hist.getItemsUsingTZ();
-  var runningList = running.getItemsUsingTZ();
-  var agentsDict = agents.getDict();
-  var chartData = await hist.getChartDataSet(7);
-
-  var username = request.session.user.username;
-  if(username===undefined || username===null)username="User";
-
-  var runningCount = runningList.length;
-  
-  // Calculate success/fail from chart data (includes both regular jobs and orchestrations)
-  var successCount = chartData.success.reduce((a, b) => a + b, 0);
-  var failCount = chartData.fail.reduce((a, b) => a + b, 0);
-
-  // Last 5 executions: job history (minus orchestration node items) plus parent orchestration executions
-  var recentRuns = [];
-  var tz = serverConfig.server.timezone;
-  const runTrigger = (manual, ctx) => {
-    const t = ctx && ctx.type;
-    if (manual === 'webhook' || t === 'webhook') return 'Webhook';
-    if (manual === 'rule' || t === 'rule') return 'Rule';
-    if (manual === true || manual === 'true' || manual === 'manual') return 'Manual';
-    return 'Schedule';
-  };
-  historyList.forEach(item => {
-    if (item.jobName && /^Orchestration\s+\[.+?\]\s+Execution\s+\[.+?\]\s+Node\s+\[.+?\]/.test(item.jobName)) return;
-    recentRuns.push({
-      name: item.jobName,
-      ts: moment.tz(item.runDate, 'YYYY-MM-DD HH:mm:ss.SSS', tz).valueOf(),
-      status: item.returnCode == 0 ? 'success' : 'fail',
-      runtime: parseFloat(item.runTime) || 0,
-      trigger: runTrigger(item.manual, item.triggerContext),
-      type: 'Script'
-    });
-  });
-  try {
-    var orchExecs = await db.getData('ORCHESTRATION_EXECUTIONS').catch(() => ({}));
-    for (const jobId in (orchExecs || {})) {
-      (orchExecs[jobId] || []).forEach(ex => {
-        if (!ex.startTime) return;
-        var st = new Date(ex.startTime).getTime();
-        var rt = ex.endTime ? (new Date(ex.endTime) - st) / 1000 : 0;
-        recentRuns.push({
-          name: ex.jobName || ex.orchestrationName || jobId,
-          jobId: jobId,
-          ts: st,
-          status: ex.finalStatus === 'success' ? 'success' : (ex.finalStatus === 'failure' || ex.finalStatus === 'error') ? 'fail' : 'running',
-          runtime: rt,
-          trigger: runTrigger(ex.manual, ex.triggerContext),
-          type: 'Orchestration'
-        });
-      });
-    }
-  } catch (e) {
-    logger.warn(`Unable to load orchestration executions for dashboard: ${e.message}`);
-  }
-  recentRuns.sort((a, b) => b.ts - a.ts);
-  recentRuns = recentRuns.slice(0, 4).map(r => ({
-    ...r,
-    when: moment.tz(r.ts, tz).format('MMM D, HH:mm:ss')
-  }));
-
-  for (const r of recentRuns) {
-    if (r.type !== 'Orchestration' || !r.jobId) continue;
-    try {
-      const job = await orchestration.getJob(r.jobId);
-      if (job && job.name) r.name = job.name;
-    } catch (err) {
-      logger.warn(`Could not get orchestration name for [${r.jobId}]: ${err.message}`);
-    }
-  }
-
-  response.render('index', {
-
-    recentRuns: recentRuns,
-
-    subject: 'Orchelium',
-    name: 'Control',
-    runningCount: runningCount,
-    successCount, successCount,
-    failCount, failCount,
-    chartData: chartData,
-    agents,agentsDict,
-    username:username,
-    mqttConnected: mqttTransport.isMQTTConnected(),
-    todayJobs: scheduler.getTodaysScheduleCount(),
-    scheduleHistory: scheduler.getLast7DaysScheduleCount(),
-    todayJobsRun: await hist.getTodaysRun()
-  });
-});
-
-app.get('/index.html',User.isAuthenticated, (request, response) => {
-  // response.render('index', {
-  //   subject: 'EJS template engine',
-  //   name: 'Control',
-  // });
-  response.redirect("/");
-});
-
-
-
-
-app.get('/agentHistory.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), async (request, response) => {
-  var agentname = request.query.name;
-  var startDate = request.query.startDate;
-  var dateNow = new Date();
-  var agent = agents.getAgent(agentname);
-  if(agent===undefined)agent={};
-
-  var agentData;
-  agentData=agentStats.get(agentname);
-  if(agentData===undefined)agentData={};
-  else agentData=JSON.parse(agentData);
-  
-
-  response.render('agentHistory', {
-    agentname: agentname,
-    timezone: serverConfig.server.timezone,
-    serverTime: dateNow,
-    agent: agent,
-    agentData: agentData  
-  });
-});
-
-
-app.get('/rest/servertime',User.isAuthenticated, async (request, response) => {
-  var dateTime = new Date();
-  var serverTime={};
-  serverTime.dateTime = dateTime;
-  response.json(serverTime);
-});
-
-
-app.get('/rest/agentdetail',User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), async (request, response) => {
-  
-  var agentname = request.query.agentname;
-  logger.info("Getting agent detail for Agent [" + agentname + "]")
-  var startDate = request.query.startDate;
-  var endDate = request.query.endDate;
-  logger.info("Start Date [" + startDate + "]")
-  logger.info("End Date   [" + endDate + "]")
-
-  var agent = agents.getAgent(agentname);
-  if(agent===undefined)agent={};
-  var history = {};
-  //var item = await agentHistory.getStatus(agentname);
-  var item = await agentHistory.getDateFilteredStatus(agentname,startDate,endDate);
-  //debug.info("Items are: " + item);
-  
-  var totalDuration = 0;
-  for (let i = 0; i < item.length; i++) {
-    //debug.debug("adding: " + item[i].duration);
-    totalDuration+=item[i].duration;
-  }
-
-  for (let i = 0; i < item.length; i++) {
-    //debug.debug("adding: " + item[i].duration);
-    var pct = (item[i].duration / totalDuration) * 100.00;
-    //pct = Math.round(pct);
-    pct=mathUtils.roundToDecimalPlaces(pct,5);
-    item[i].percent=pct;
-  }
-  var totalPct=0;
-  for (let i = 0; i < item.length; i++) {
-    totalPct += item[i].percent;
-  }
-
-  var data={};
-  data.filter={};
-  data.filter.startDate=startDate;
-  data.filter.endDate=endDate;
-  data.totalDuration=totalDuration;
-  data.totalPct=totalPct;
-  data.history=item;
-  response.json(data);
-});
-
-
-app.get('/rest/agentquery',User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), (request, response) => {
-  var agentname = request.query.name;
-  var agent = agents.getAgent(agentname);
-  response.header('Content-type', 'application/json');
-  if(agent===undefined)agent={};
-  agent.found="false";
-  response.send(JSON.stringify(agent,null,2));
-});
-
-app.get('/agentEdit.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_EDIT), (request, response) => {
-  var msg = request.query.agentId;
-  var agentObj=agents.getAgent(msg);
-  var scriptsMeta = refreshScripts();
-  var scripts = [];
-  for (var i = 0; i < scriptsMeta.length; i++) {
-    scripts.push(scriptsMeta[i].data.filename);
-  }
-  var tokenNotice = request.session.tokenNotice || '';
-  delete request.session.tokenNotice;
-  var shownToken = null;
-  if (request.session.shownAgentToken && request.session.shownAgentToken.name === msg) {
-    shownToken = request.session.shownAgentToken;
-    delete request.session.shownAgentToken;
-  }
-  response.render('agentEdit', {
-    subject: 'Agent Edit',
-    name: 'Control/AgentEdit',
-    agent: agentObj,
-    scripts: scripts,
-    csrf: request.csrfToken(),
-    hasCredential: require('./communications/agentAuth').hasCredential(msg),
-    tokenNotice: tokenNotice,
-    shownToken: shownToken,
-  });
-});
-
-app.get('/agentregister.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_CREATE), (request, response) => {
-  var msg = request.query.message;
-  var agentObj=JSON.parse(msg);
-  response.render('agentregister', {
-    subject: 'EJS template engine',
-    name: 'Control/AgentRegister',
-    agent: agentObj,
-    //scripts: scripts,
-    csrf: request.csrfToken(),
-  });
-});
-
-app.get('/agentstatus.html',User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW),async (request, response) => {
-
-    var agentdict = agents.getDict();
-    var history = {};
-    
-    for (const [key, value] of Object.entries(agentdict)) {
-      var item = await agentHistory.getStatus(key);
-      //console.log(">>>>>>>>>>>>>>>>>>>>>>");
-      //console.log(JSON.stringify(key));
-      //console.log(JSON.stringify(value));
-      //console.log(">>>> AGENT DATE: " + item.date);
-      value.lastStatusReport = dateTimeUtils.displayFormatDate(new Date(value.lastStatusReport),false,serverConfig.server.timezone,"YYYY-MM-DDTHH:mm:ss",false);
-            
-
-      history[key]={};
-      history[key].list=item;
-    }
-
-    //console.log(history);
-
-    
-    
-    const tokenNotice = request.session.tokenNotice || '';
-    delete request.session.tokenNotice;
-    const agentAuth = require('./communications/agentAuth');
-    const tokenAgents = {};
-    for (const agentName of Object.keys(agentdict)) {
-      if (agentAuth.hasCredential(agentName)) tokenAgents[agentName] = true;
-    }
-
-    response.render('agentstatus', {
-    subject: 'EJS template engine',
-    name: 'Control/AgentStatus',
-    logs: logsStr,
-    agents: agentdict,
-    history: history,
-    MQTT_ENABLED: serverConfig.mqtt.enabled,
-    MQTT_SERVER_PORT: serverConfig.mqtt.port,
-    MQTT_SERVER: serverConfig.mqtt.server,
-    MQTT_USERNAME: serverConfig.mqtt.username || '',
-    MQTT_PASSWORD: serverConfig.mqtt.password || '',
-    WS_ENABLED: serverConfig.websocket_server.enabled,
-    WS_SERVER: serverConfig.websocket_server.server,
-    WS_PORT: serverConfig.websocket_server.port,
-    serverVers: minSupportedVersion,
-    tokenNotice: tokenNotice,
-    tokenAgents: tokenAgents,
-  });
-});
-
-
-app.get('/rest/eta',User.isAuthenticated, (request, response) => {
-  //populateBackupConfig();
-  response.header('Content-type', 'application/json');
-  response.send(JSON.stringify(config,null,2));
-});
 
 var logsStr = "";
-
-
-app.post('/agent-submit.html', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_CREATE), (req, res) => {
-  //Get the form data
-  
-  var name = req.body.agentname;
-  var command = req.body.agentcommand;
-  var description = req.body.agentdescription;
-  var imageurl = req.body.imageurl;
-
-  agents.registerAgent(name,description,command,imageurl,undefined,description);
-  const agentAuth = require('./communications/agentAuth');
-  const agent = agents.getAgent(name);
-  if (agentAuth.supportsAgentToken(agent)) {
-    try {
-      const token = agentAuth.issue(name);
-      const delivered = agentComms.sendEnrollment(name, token);
-      req.session.shownAgentToken = { name, token, delivered: Boolean(delivered), rotationPending: false };
-      return res.redirect('/agentEdit.html?agentId=' + encodeURIComponent(name));
-    } catch (err) {
-      logger.error(`Failed to issue connection token for [${name}]: ${err.message}`);
-      req.session.tokenNotice = 'The agent was approved, but the connection token could not be created.';
-    }
-  } else {
-    req.session.tokenNotice = 'This agent does not support connection tokens yet. Update it, then issue a token from the agent edit page. Until then a disconnected agent can still be claimed by the first client that connects.';
-  }
-  res.redirect("/agentstatus.html");
-
-});
-
-app.post('/agent-token.html', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_EDIT), (req, res) => {
-  const name = req.body.agentname;
-  const action = req.body.tokenAction;
-  const agentAuth = require('./communications/agentAuth');
-  const agent = agents.getAgent(name);
-  if (!agent) {
-    return res.status(404).send('Agent not found');
-  }
-
-  const editUrl = '/agentEdit.html?agentId=' + encodeURIComponent(name);
-  try {
-    if (action === 'rotate') {
-      if (!agentAuth.hasCredential(name)) {
-        req.session.tokenNotice = 'Issue a connection token before rotating it.';
-        return res.redirect(editUrl);
-      }
-      if (!agentAuth.supportsAgentToken(agent)) {
-        req.session.tokenNotice = 'Update the agent before rotating its connection token.';
-        return res.redirect(editUrl);
-      }
-      const reachable = agent.commsType === 'mqtt'
-        ? serverConfig.mqtt.enabled == 'true' && mqttTransport.isMQTTConnected()
-        : webSocketServer.hasOpenConnection(name);
-      if (!reachable) {
-        req.session.tokenNotice = 'The agent must be connected before its token can be rotated.';
-        return res.redirect(editUrl);
-      }
-      const sealed = agentAuth.beginRotation(name);
-      agentComms.sendCommand(name, null, 'rotateToken', sealed, 'token-rotation', agent.commsType, false, null);
-      req.session.tokenNotice = 'Rotation sent. The current token stays valid until the agent confirms the new one.';
-      return res.redirect(editUrl);
-    }
-
-    if (action === 'reveal') {
-      const revealed = agentAuth.reveal(name);
-      if (!revealed) {
-        req.session.tokenNotice = 'This agent has no connection token.';
-      } else {
-        req.session.shownAgentToken = {
-          name,
-          token: revealed.token,
-          delivered: false,
-          rotationPending: revealed.rotationPending,
-        };
-      }
-      return res.redirect(editUrl);
-    }
-
-    const token = agentAuth.issue(name);
-    const delivered = agentAuth.supportsAgentToken(agent) ? Boolean(agentComms.sendEnrollment(name, token)) : false;
-    req.session.shownAgentToken = { name, token, delivered, rotationPending: false };
-    return res.redirect(editUrl);
-  } catch (err) {
-    logger.error(`Agent token action failed for [${name}]: ${err.message}`);
-    if (action === 'rotate') {
-      try { agentAuth.cancelRotation(name); } catch (cancelErr) { logger.warn(cancelErr.message); }
-    }
-    req.session.tokenNotice = 'The connection token could not be updated.';
-    return res.redirect(editUrl);
-  }
-});
-
-app.post('/agentEdit.html', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_EDIT), async (req, res) => {
-  try {
-    //Get the form data
-    var name = req.body.agentname;
-    var description = req.body.agentdescription;
-    var imageurl = req.body.imageurl;
-    var concurrency = parseInt(req.body.concurrency, 10);
-    if (isNaN(concurrency) || concurrency < 1) concurrency = 3;
-    var agentObj = agents.getAgent(name);
-    agentObj.display = description;
-    agentObj.concurrency = concurrency;
-    await agents.addObjToAgentStatusDict(agentObj);
-
-    //agents.registerAgent(name,description,command,imageurl,undefined,description);
-    res.redirect("/agentstatus.html");
-  } catch (err) {
-    logger.error(`Failed to update agent [${req.body.agentname}]:`, err.message);
-    res.status(500).send('Error updating agent');
-  }
-});
-
-app.get('/socket.io/socket.io.js', (req, res) => {
-  res.sendFile(__dirname + '/node_modules/socket.io/client-dist/socket.io.js');
-});
-
-
-app.get('/rest/debug/logs', User.isAuthenticated, User.requireSuperAdmin(), async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  const logMessages = loglines.map(log => log.data.join(' ')); // Extract log messages
-  res.json(logMessages); // Send log messages as JSON
-});
-
-
-app.get('/rest/debug/on', User.isAuthenticated, User.requireSuperAdmin(), async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-
-  try {
-    logger.level="trace";
-    const statusJsonStr = JSON.stringify({"logger_level":logger.level}); 
-    res.set('Content-Type', 'application/json'); // Set the content-type header
-    res.send(statusJsonStr); // Send the JSON response
-  } catch (error) {
-    console.error("Error in API:", error);
-    res.status(500).json({ status: "error", message: "Internal Server Error" });
-  }
-});
-
-
-app.get('/rest/debug/off', User.isAuthenticated, User.requireSuperAdmin(), async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-
-  try {
-    logger.level="warn";
-    const statusJsonStr = JSON.stringify({"logger_level":logger.level}); 
-    res.set('Content-Type', 'application/json'); // Set the content-type header
-    res.send(statusJsonStr); // Send the JSON response
-  } catch (error) {
-    console.error("Error in API:", error);
-    res.status(500).json({ status: "error", message: "Internal Server Error" });
-  }
-});
-
-app.get('/rest/updateAgent/:agentId/isRunning', express.json(), User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  const agentId = req.params.agentId;
-  logger.debug(`Getting Job Status update for agent [${agentId}]`);
-
-  var runningList = running.searchItemWithName("||INTERNAL||Update " + agentId);
-  logger.debug(JSON.stringify(runningList));
-  var response={};
-
-  if(runningList!=null){
-    response.status=true;
-    response.item=runningList;
-  }
-  else {
-    response.status=false;
-    response.item=runningList
-  }
-
-  res.set('Content-Type', 'application/json'); // Set the content-type header
-  res.send(response);
-});
-
-app.get('/rest/updateAgent/:agentId/status', express.json(), User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_VIEW), (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  const agentId = req.params.agentId;
-  var agent = agents.getAgent(agentId);
-
-  var searchTerm = "||INTERNAL||Update " + agentId;
-  var runningList = running.searchItemWithName(searchTerm);
-  var response = {};
-  response.status = "ERROR";
-  response.message = "";
-  response.agent = agent;
-  if(runningList!=null){
-    //Job Is running
-    response.status="RUNNING";
-    response.item = runningList;
-  }
-  else {
-    //Job is not running - Whats status of last completed item  
-    response.status="COMPLETED";
-    logger.debug(`Getting Job Status update for agent [${agentId}]`);
-    var historyItem = hist.searchItemWithName("||INTERNAL||Update " + agentId);
-    response.item=historyItem;
-    if(historyItem!=null){
-      if(response.item.returnCode!=0){
-        response.status="ERROR"
-        message=response.item.log;  
-      }
-    }
-    else{
-      response.status="UNKOWN";
-      response.item = undefined;
-      response.message = "No running, or historical log of uprade";
-    }
-
-    if(response.status=="COMPLETED"){
-      //Now see if the agent is actually connected because once the job is finished, the agent goes into a restart
-
-      var agentStatus = agent.status;
-      var agentReportDate = agent.lastStatusReport;
-      
-      const ONLINE  = "online";
-      const OFFLINE = "offline";
-      const RUNNING = "running";
-      
-      if(agent.status == OFFLINE){
-        response.status="WAITING_AGENT_CONNECTION";
-        response.message=`Agent in status [${agent.status}]. Waiting for connection`;
-      }
-
-    }
-  }
-  
-
-  res.set('Content-Type', 'application/json'); // Set the content-type header
-  res.send(response);
-});
-
-
-app.post('/rest/updateAgent/:agentId', express.json(), User.isAuthenticated, User.requirePermission(PERMISSIONS.AGENTS_UPDATE), (req, res) => {
-  
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  const agentId = req.params.agentId;
-  const jsonData = req.body;
-  
-  try{
-
-    //Issue a job execution to run the update script
-    logger.debug(`Recevied [${JSON.stringify(jsonData)}]`);
-    logger.debug(`starting update for agent [${agentId}] with command [${jsonData.command}]`);
-    //scheduler.runUpdateJob(agentId,jsonData);
-    res.set('Content-Type', 'application/json'); // Set the content-type header
-    scheduler.runUpdateJob(agentId,jsonData.command); 
-    res.send({"status":"ok"}); // Send the JSON response
-  }
-  catch(err){
-    logger.error(err);
-    res.status(500).json({ status: "error", message: "Internal Server Error [" + err.name +"]" + err.message});
-  }
-});
-
-app.get('/rest/templates', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  var templateRepository = {};
-  templateRepository.status="unknown";
-  templateRepository.date=new Date();
-  templateRepository.templates = templates;
-  templateRepository.status="Retrieved Templates from cache";
-  templateRepository.date=new Date();
-  res.set('Content-Type', 'application/json'); // Set the content-type header
-  res.send(templateRepository);
-});
-
-app.get('/rest/templates/refresh', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  var templateRepository = {};
-  templateRepository.status="unknown";
-
-  if(serverConfig.templates && serverConfig.templates.enabled=="true"){
-    (async () => {
-      templates = new TemplateRepository(serverConfig.templates.repositoryUrl);
-      await templates.init();
-    })();
-    templateRepository.status="refreshed" 
-    templateRepository.date=new Date();
-  }
-  else{
-    templateRepository.status="Template Scripts Disabled";
-    templateRepository.templates = null;
-    logger.info("Template Scripts Disabled");
-  }
-  res.set('Content-Type', 'application/json'); // Set the content-type header
-  res.send(templateRepository);
-
-});
-
-app.get('/rest/debug', User.isAuthenticated, User.requireSuperAdmin(), async (req, res) => {
-  const user = req.session.user;
-  if (!user) {
-    return res.redirect('/register.html');
-  }
-  
-  //build debug Object
-  var debug={};
-  debug.settings={};
-  debug.settings.REPOSITORY_URL= REPOSITORY_URL;
-  debug.settings.serverConfig = serverConfig;
-  debug.connections={};
-  debug.connections.mqtt={};
-  debug.connections.mqtt.transport = mqttTransport;
-  debug.connections.ws={};
-  debug.connections.ws.transport= webSocketServer;
-  debug.connections.ws.wsClients=wsClients;
-  debug.logger={};
-  debug.logger.level = logger.level;
-
-  debug.history={};
-
-//  debug.user={}
-//  debug.user.info={};
-//  debug.user.userCount=await User.getUserCount();
-//  debug.user.info.username = user
-
-  try{
-    var debugStr = maskPasswords(JSON.stringify(debug));
-    res.set('Content-Type', 'application/json'); // Set the content-type header
-    res.send(debugStr); // Send the JSON response
-  }
-  catch(err){
-    res.status(500).json({ status: "error", message: "Internal Server Error [" + err.name +"]" + err.message});
-  }
-});
 
 
 app.use((req, res, next) => {
@@ -4186,496 +1168,118 @@ function logStaleReconcileSummary()
 /**
  * Get list of all orchestration jobs
  */
-app.get('/rest/orchestration/jobs', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const jobs = await orchestration.getAllJobs();
-  res.json(jobs);
-}));
+
 
 /**
  * Get a specific orchestration job
  */
-app.get('/rest/orchestration/jobs/:jobId', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const job = await orchestration.getJob(req.params.jobId);
-  res.json(job);
-}));
+
 
 /**
  * Create or update an orchestration job
  */
-app.post('/rest/orchestration/jobs', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_CREATE), asyncHandler(async (req, res) => {
-  const { jobId, name, description, nodes, edges, icon, color } = req.body;
-  
-  if (!jobId || !name) {
-    return res.status(400).json({ error: 'Job ID and name are required' });
-  }
-  
-  const job = await orchestration.saveJob(jobId, {
-    name,
-    description,
-    nodes,
-    edges,
-    icon,
-    color
-  });
-  
-  res.json({ success: true, job });
-}));
+
 
 /**
  * Export a single orchestration job
  */
-app.get('/rest/orchestration/jobs/:jobId/export', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_EXPORT), asyncHandler(async (req, res) => {
-  const jobId = req.params.jobId;
-  const job = await orchestration.getJob(jobId);
 
-  const zipBuffer = await importExportManager.createOrchestrationExportBuffer({
-    jobId,
-    orchestration: job
-  });
-
-  const safeName = importExportManager.toSafeFilenamePart(job.name || jobId, 'orchestration');
-  const timestamp = importExportManager.getTimestampForFilename();
-  const exportFilename = `orchestration-${safeName}-${timestamp}.zip`;
-
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="${exportFilename}"`);
-  res.send(zipBuffer);
-}));
-
-app.post('/rest/orchestration/jobs/import', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_IMPORT), upload.single('importFile'), asyncHandler(async (req, res) => {
-  if (!req.file || !req.file.buffer) {
-    throw new AppError('Missing import file upload', 400);
-  }
-
-  let parsedImport;
-  try {
-    parsedImport = await importExportManager.parseOrchestrationImportBuffer(req.file.buffer);
-  } catch (error) {
-    throw new AppError(`Orchestration import validation failed: ${error.message}`, 400);
-  }
-
-  const existingJobs = await orchestration.getAllJobs();
-  const identity = importExportManager.resolveUniqueOrchestrationIdentity({
-    desiredName: parsedImport.orchestration.name,
-    desiredJobId: parsedImport.orchestration.jobId,
-    existingJobs
-  });
-
-  const savePayload = {
-    name: identity.name,
-    description: parsedImport.orchestration.description,
-    icon: parsedImport.orchestration.icon,
-    color: parsedImport.orchestration.color,
-    nodes: parsedImport.orchestration.nodes,
-    edges: parsedImport.orchestration.edges
-  };
-
-  await orchestration.saveJob(identity.jobId, savePayload);
-  logger.info(`Orchestration imported successfully as [${identity.jobId}]`);
-
-  res.json({
-    success: true,
-    importedType: 'orchestration',
-    original: {
-      jobId: parsedImport.orchestration.jobId || null,
-      name: parsedImport.orchestration.name
-    },
-    imported: {
-      jobId: identity.jobId,
-      name: identity.name
-    },
-    renamed: identity.renamed,
-    warnings: identity.renamed ? ['Orchestration identity already existed and was auto-renamed.'] : []
-  });
-}));
 
 /**
  * Update an existing orchestration job
  */
-app.put('/rest/orchestration/jobs/:jobId', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_EDIT), asyncHandler(async (req, res) => {
-  const { name, description, nodes, edges, icon, color } = req.body;
-  const { jobId } = req.params;
 
-  const job = await orchestration.saveJob(jobId, {
-    name,
-    description,
-    nodes,
-    edges,
-    icon,
-    color
-  });
-  
-  res.json({ success: true, job });
-}));
 
 /**
  * Delete an orchestration job
  */
-app.delete('/rest/orchestration/jobs/:jobId', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_DELETE), asyncHandler(async (req, res) => {
-  const { jobId } = req.params;
-  
-  await orchestration.deleteJob(jobId);
-  res.json({ success: true, message: `Orchestration job [${jobId}] deleted` });
-}));
+
 
 /**
  * Mark a classic job execution as having been re-run
  */
-app.post('/rest/jobs/executions/:executionId/markAsRerun', User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_RESUBMIT), asyncHandler(async (req, res) => {
-  const { executionId } = req.params;
-  
-  logger.info(`Marking classic job execution [${executionId}] as re-run`);
-  
-  try {
-    // Get history and mark the execution as re-run
-    const hist = require('./history.js');
-    const success = await hist.markAsRerunDirect(executionId);
-    
-    if (success) {
-      res.json({ success: true });
-    } else {
-      res.status(404).json({ success: false, message: `Execution [${executionId}] not found` });
-    }
-  } catch (err) {
-    logger.error(`Error marking job as re-run: ${err.message}`);
-    res.status(500).json({ success: false, message: err.message });
-  }
-}));
+
 
 /**
  * Mark an orchestration execution as having been re-run
  */
-app.post('/rest/orchestration/jobs/:jobId/executions/:executionId/markAsRerun', User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_RESUBMIT), asyncHandler(async (req, res) => {
-  const { jobId, executionId } = req.params;
-  
-  logger.info(`Marking orchestration execution [${jobId}] [${executionId}] as re-run`);
-  
-  try {
-    const executions = await db.getData('ORCHESTRATION_EXECUTIONS').catch(() => ({}));
-    
-    if (!executions[jobId]) {
-      return res.status(404).json({ success: false, message: `Orchestration [${jobId}] not found` });
-    }
-    
-    const execution = executions[jobId].find(e => e.executionId === executionId);
-    if (!execution) {
-      return res.status(404).json({ success: false, message: `Execution [${executionId}] not found` });
-    }
-    
-    // Mark as re-run with current timestamp
-    execution.wasRerunAt = new Date().toISOString();
-    logger.info(`Marked execution [${executionId}] with wasRerunAt [${execution.wasRerunAt}]`);
-    
-    // Save back to database
-    await db.putData('ORCHESTRATION_EXECUTIONS', executions);
-    
-    res.json({ success: true, wasRerunAt: execution.wasRerunAt });
-  } catch (err) {
-    logger.error(`Error marking orchestration as re-run: ${err.message}`);
-    res.status(500).json({ success: false, message: err.message });
-  }
-}));
+
 
 /**
  * Execute an orchestration job
  */
-app.post('/rest/orchestration/jobs/:jobId/execute', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const { jobId } = req.params;
-  const { rerunFrom } = req.body || {};  
-  
-  logger.info(`Executing orchestration job [${jobId}]` + (rerunFrom ? ` [rerunFrom: ${rerunFrom}]` : ""));
-  
-  // Generate execution ID immediately (same as orchestrationEngine does)
-  const crypto = require('crypto');
-  const executionId = crypto.randomBytes(8).toString('hex');
-  
-  // Get the orchestration job to get its name for the running queue
-  let orchestrationName = jobId; // fallback to jobId
-  try {
-    const job = await orchestration.getJob(jobId);
-    if (job && job.name) {
-      orchestrationName = job.name;
-    }
-  } catch (err) {
-    logger.warn(`Could not get orchestration name for [${jobId}]: ${err.message}`);
-  }
-  
-  // Create a stub execution record (NOT saved to permanent history yet)
-  // This is cached in-memory so monitor can find it immediately
-  const stubExecution = {
-    jobId: jobId,
-    executionId: executionId,
-    orchestrationVersion: 1,
-    startTime: new Date().toISOString(),
-    endTime: null,
-    status: 'running',
-    currentNode: null,
-    visitedNodes: [],
-    scriptOutputs: {},
-    conditionEvaluations: {},
-    nodeMetrics: {},
-    errors: [],
-    finalStatus: null,
-    manual: true,
-    isStub: true,  // Mark as temporary stub execution
-    rerunFrom: rerunFrom || null  // NEW: Track if this is a rerun
-  };
-  
-  // Cache the stub in-memory (not in permanent history)
-  saveInProgressExecution(jobId, executionId, stubExecution);
-  logger.info(`Created in-progress execution for [${jobId}] with ID [${executionId}]`);
-  
-  // Add to running queue so it shows in running list with link to monitor
-  // Note: Orchestrations span multiple agents, so we pass null for agentName (concurrency not enforced per-agent)
-  const runningItem = running.createItem(orchestrationName, new Date().toISOString(), 'manual', executionId, null);
-  runningItem.orchestrationId = jobId;
-  running.add(runningItem);
-  logger.info(`Added orchestration to running queue: [${orchestrationName}] with execution [${executionId}]`);
-  
-  // Create callback to update cache as nodes complete
-  const onNodeComplete = (executionLog) => {
-    updateInProgressExecution(jobId, executionId, executionLog);
-  };
-  
-  // Start orchestration execution asynchronously (fire-and-forget)
-  // Pass executionId so engine uses the same ID for websocket events
-  // Pass onNodeComplete callback to update cache as nodes complete
-  // Don't await - return immediately so client redirects right away
-  orchestration.executeJob(jobId, true, executionId, onNodeComplete, null, rerunFrom).then(async (executionLog) => {
-    updateInProgressExecution(jobId, executionId, executionLog);
-    // Execute in background, save results when complete
-    try {
-      await orchestration.saveExecutionResult(executionLog);
-      // If this was a re-run, mark the original execution as having been re-run
-      if (rerunFrom) {
-        await hist.markAsRerun(rerunFrom);
-      }
-    } catch (saveErr) {
-      logger.error(`Failed to save execution result for orchestration [${jobId}]: ${saveErr.message}`);
-    }
-    // Clear the stub from cache - actual execution is now in history
-    clearInProgressExecution(jobId, executionId);
-    // Remove from running queue
-    running.removeItemByExecutionId(executionId);
-    logger.info(`Orchestration [${jobId}] execution completed with status: ${executionLog.finalStatus}`);
-  }).catch((err) => {
-    logger.error(`Background orchestration execution failed: ${err.message}`);
-    // Try to retrieve execution log from cache to save to history
-    const inProgressExecution = getInProgressExecution(jobId, executionId);
-    if (inProgressExecution) {
-      // Mark as failed if not already marked
-      if (!inProgressExecution.status || inProgressExecution.status === 'running') {
-        inProgressExecution.status = 'failed';
-        inProgressExecution.finalStatus = 'error';
-      }
-      inProgressExecution.endTime = new Date().toISOString();
-      if (!inProgressExecution.errors) {
-        inProgressExecution.errors = [];
-      }
-      inProgressExecution.errors.push({ message: err.message });
-      // Save to history even on error
-      orchestration.saveExecutionResult(inProgressExecution).catch((saveErr) => {
-        logger.error(`Failed to save failed execution result for orchestration [${jobId}]: ${saveErr.message}`);
-      });
-    }
-    // Clear the stub on error too
-    clearInProgressExecution(jobId, executionId);
-    // Remove from running queue on error as well
-    running.removeItemByExecutionId(executionId);
-  });
-  
-  // Return immediately with executionId
-  res.json({ 
-    success: true, 
-    executionId: executionId
-  });
-}));
+
 
 /**
  * Get execution history for a job
  */
-app.get('/rest/orchestration/jobs/:jobId/executions', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const { jobId } = req.params;
-  
-  const executions = await orchestration.getExecutionHistory(jobId);
-  res.json(executions);
-}));
+
 
 /**
  * Get list of available scripts for the palette
  */
-app.get('/rest/orchestration/scripts', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const scripts = await orchestration.getAvailableScripts();
-  res.json(scripts);
-}));
+
 
 /**
  * Get list of available plugins for orchestration
  */
-app.get('/rest/orchestration/plugins', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const plugins = await orchestration.getAvailablePlugins();
-  res.json(plugins);
-}));
+
 
 /**
  * Get list of available agents for orchestration execution
  */
-app.get('/rest/orchestration/agents', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const agentDict = agents.getDict();
-  const agentList = Object.entries(agentDict).map(([name, agent]) => ({
-    id: name,
-    name: name,
-    description: agent.description || '',
-    status: agent.status || 'offline',
-    address: agent.address || '',
-    version: agent.version || ''
-  }));
-  res.json(agentList);
-}));
+
 
 /**
  * Get orchestration metadata (name, description, icon, color) without full definition
  */
-app.get('/rest/orchestration/jobs/:jobId/metadata', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const job = await orchestration.getJob(req.params.jobId);
-  res.json({
-    id: job.id,
-    name: job.name,
-    description: job.description,
-    icon: job.icon || 'schema',
-    color: job.color || '#000000',
-    type: job.type,
-    createdAt: job.createdAt,
-    updatedAt: job.updatedAt,
-    currentVersion: job.currentVersion,
-    totalVersions: job.totalVersions
-  });
-}));
+
 
 /**
  * Get a specific version of an orchestration job
  */
-app.get('/rest/orchestration/jobs/:jobId/versions/:version', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const job = await orchestration.getJobVersion(req.params.jobId, req.params.version);
-  res.json(job);
-}));
+
 
 /**
  * Get all schedules
  */
-app.get('/rest/schedules', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), asyncHandler(async (req, res) => {
-  const schedules = scheduler.getSchedules();
-  res.json(schedules);
-}));
+
 
 /**
  * Get a specific schedule by job name
  */
-app.get('/rest/schedules/:jobName', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_VIEW), asyncHandler(async (req, res) => {
-  const { jobName } = req.params;
-  const schedule = scheduler.getSchedule(jobName);
-  
-  if (!schedule) {
-    return res.status(404).json({ 
-      success: false, 
-      message: `Schedule [${jobName}] not found` 
-    });
-  }
-  
-  res.json(schedule);
-}));
+
 
 /**
  * Enable or disable a schedule without removing it.
  * A disabled job stays on the list and calendar and runs on the next schedule once enabled.
  */
-app.post('/rest/schedules/:jobName/disabled', validateCsrf, User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_EDIT), asyncHandler(async (req, res) => {
-  const { jobName } = req.params;
-  const disabled = req.body && (req.body.disabled === true || req.body.disabled === 'true');
-  const schedule = await scheduler.setScheduleDisabled(jobName, disabled);
-  res.json({
-    success: true,
-    jobName: schedule.jobName,
-    disabled: schedule.disabled === true
-  });
-}));
+
 
 /**
  * Delete a specific schedule by job name
  */
-app.delete('/rest/schedules/:jobName', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_DELETE), asyncHandler(async (req, res) => {
-  const { jobName } = req.params;
-  
-  try {
-    await scheduler.deleteSchedule(jobName);
-    res.json({ success: true, message: `Schedule [${jobName}] deleted` });
-  } catch (err) {
-    logger.error(`Error deleting schedule [${jobName}]: ${err.message}`);
-    res.status(400).json({ 
-      success: false, 
-      message: `Failed to delete schedule: ${err.message}` 
-    });
-  }
-}));
+
 
 /**
  * Delete all schedules
  */
-app.delete('/rest/schedules', User.isAuthenticated, User.requirePermission(PERMISSIONS.JOBS_DELETE), asyncHandler(async (req, res) => {
-  try {
-    await scheduler.clearSchedules();
-    res.json({ success: true, message: 'All schedules deleted' });
-  } catch (err) {
-    logger.error(`Error deleting all schedules: ${err.message}`);
-    res.status(400).json({ 
-      success: false, 
-      message: `Failed to delete schedules: ${err.message}` 
-    });
-  }
-}));
+
 
 /**
  * Definition store status (backend, counts, invalid files)
  */
-app.get('/rest/definitions/status', User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.JOBS_VIEW, PERMISSIONS.ORCHESTRATIONS_VIEW]), asyncHandler(async (_req, res) => {
-  res.json({ success: true, status: definitionStore.getStatus() });
-}));
+
 
 /**
  * Force reload of filesystem-backed definitions
  */
-app.post('/rest/definitions/reload', User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.JOBS_EDIT, PERMISSIONS.ORCHESTRATIONS_EDIT]), asyncHandler(async (_req, res) => {
-  await definitionStore.reload();
-  await scheduler.init();
-  await orchestration.init();
-  res.json({ success: true, message: 'Definitions reloaded', status: definitionStore.getStatus() });
-}));
+
 
 /**
  * Migrate definitions from DB keys into filesystem assets.
  */
-app.post('/rest/definitions/migrate-db-to-fs', User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.JOBS_EDIT, PERMISSIONS.ORCHESTRATIONS_EDIT]), asyncHandler(async (req, res) => {
-  if (!['fs', 'hybrid'].includes(definitionStore.getBackend())) {
-    return res.status(400).json({
-      success: false,
-      message: `Definition backend must be fs or hybrid (current: ${definitionStore.getBackend()})`
-    });
-  }
 
-  const deleteSource = req.body && (req.body.deleteSource === true || req.body.deleteSource === 'true');
-  const migratedSchedules = await scheduler.migrateSchedulesToFilesystem({ deleteSource });
-  const migratedOrchestrations = await orchestration.migrateToFilesystem({ deleteSource });
-
-  res.json({
-    success: true,
-    message: 'Definition migration complete',
-    migrated: {
-      schedules: migratedSchedules,
-      orchestrations: migratedOrchestrations
-    },
-    deleteSource
-  });
-}));
 
 // =========================
 // NOTIFICATIONS REST API - ADDITIONAL ENDPOINTS
@@ -4684,28 +1288,12 @@ app.post('/rest/definitions/migrate-db-to-fs', User.isAuthenticated, User.requir
 /**
  * Create a new notification
  */
-app.post('/rest/notifications', User.isAuthenticated, asyncHandler(async (req, res) => {
-  const { type, title, description, url } = req.body;
-  const runDate = new Date().toISOString();
-  const item = notificationData.createNotificationItem(runDate, type, title, description, url);
-  notificationData.add(item);
-  res.status(201).json({ success: true, item });
-}));
+
 
 /**
  * Update a notification by index
  */
-app.put('/rest/notifications/:index', User.isAuthenticated, asyncHandler(async (req, res) => {
-  const index = parseInt(req.params.index);
-  const { type, title, description, url } = req.body;
-  let items = notificationData.getItems();
-  if (index < 0 || index >= items.length) {
-    return res.status(404).json({ success: false, message: 'Notification not found' });
-  }
-  items[index] = notificationData.createNotificationItem(new Date().toISOString(), type, title, description, url);
-  await notificationData.updateDbPromise();
-  res.json({ success: true, item: items[index] });
-}));
+
 
 // =========================
 // JOB HISTORY REST API - CRUD ENDPOINTS
@@ -4714,213 +1302,80 @@ app.put('/rest/notifications/:index', User.isAuthenticated, asyncHandler(async (
 /**
  * Get all job history items
  */
-app.get('/rest/history', User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_VIEW), asyncHandler(async (req, res) => {
-  const items = await hist.getItemsUsingTZ();
-  res.json(items);
-}));
+
 
 /**
  * Get a single job history item by index
  */
-app.get('/rest/history/:index', User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_VIEW), asyncHandler(async (req, res) => {
-  const items = await hist.getItemsUsingTZ();
-  const index = parseInt(req.params.index);
-  if (index < 0 || index >= items.length) {
-    return res.status(404).json({ success: false, message: 'History item not found' });
-  }
-  res.json(items[index]);
-}));
+
 
 /**
  * Create a new job history item
  */
-app.post('/rest/history', User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_VIEW), asyncHandler(async (req, res) => {
-  const item = req.body;
-  hist.add(item);
-  res.status(201).json({ success: true, item });
-}));
+
 
 /**
  * Update a job history item by index
  */
-app.put('/rest/history/:index', User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_RESUBMIT), asyncHandler(async (req, res) => {
-  const items = await hist.getItemsUsingTZ();
-  const index = parseInt(req.params.index);
-  if (index < 0 || index >= items.length) {
-    return res.status(404).json({ success: false, message: 'History item not found' });
-  }
-  items[index] = req.body;
-  await hist.updateDb();
-  res.json({ success: true, item: items[index] });
-}));
+
 
 /**
  * Delete a job history item by index
  */
-app.delete('/rest/history/:index', User.isAuthenticated, User.requirePermission(PERMISSIONS.HISTORY_RESUBMIT), asyncHandler(async (req, res) => {
-  let items = await hist.getItemsUsingTZ();
-  const index = parseInt(req.params.index);
-  if (index < 0 || index >= items.length) {
-    return res.status(404).json({ success: false, message: 'History item not found' });
-  }
-  items.splice(index, 1);
-  await hist.updateDb();
-  res.json({ success: true });
-}));
+
 
 // =========================
 // PLUGIN MANAGER PAGE
 // =========================
 
-app.get('/plugins.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.PLUGINS_MANAGE), asyncHandler(async (req, res) => {
-  res.render('pluginManager', { version, user: req.session.user, csrf: req.csrfToken() });
-}));
 
 // =========================
 // PLUGIN MANAGER REST API
 // =========================
 
 // GET /rest/plugins/registry — fetch remote registry merged with local install status
-app.get('/rest/plugins/registry', User.isAuthenticated, User.requirePermission(PERMISSIONS.PLUGINS_MANAGE), asyncHandler(async (req, res) => {
-  const pluginRegistry = require('./pluginRegistry.js');
-  const remoteRegistry = await pluginManager.fetchRemoteRegistry(serverConfig.pluginRegistry);
-  //console.log('REGISTRY SAMPLE', JSON.stringify(remoteRegistry, null, 2));
-  const installed = pluginRegistry.getRegistry();
 
-  const rawBase   = (serverConfig.pluginRegistry && serverConfig.pluginRegistry.url || '').replace(/\/registry\.json$/, '');
-  const sourceBase = (remoteRegistry.source || '').replace(/\/$/, '');
-  const plugins = remoteRegistry.plugins.map(p => {
-    const local = installed[p.name];
-    return {
-      ...p,
-      installed:        !!local,
-      installedVersion: local ? (local.version || null) : null,
-      updateAvailable:  !!(local && local.version && p.version && local.version !== p.version),
-      //iconUrl:          rawBase && p.path ? `${rawBase}/${p.path}/icon.svg` : null,
-      docsUrl:          sourceBase && p.path ? `${sourceBase}/blob/main/${p.path}/docs.md` : null,
-    };
-  });
-
-  res.json({ success: true, plugins, registryVersion: remoteRegistry.registryVersion, updated: remoteRegistry.updated });
-}));
 
 // POST /rest/plugins/install/:name — download and install a plugin from the registry
-app.post('/rest/plugins/install/:name', User.isAuthenticated, User.requirePermission(PERMISSIONS.PLUGINS_MANAGE), express.json(), asyncHandler(async (req, res) => {
-  const pluginName    = req.params.name;
-  const registryEntry = req.body && req.body.registryEntry;
 
-  if (!registryEntry || typeof registryEntry !== 'object') {
-    return res.status(400).json({ success: false, message: 'Request body must include registryEntry' });
-  }
-
-  await pluginManager.installPlugin(pluginName, registryEntry, serverConfig.pluginRegistry);
-  await require('./pluginRegistry.js').reload();
-  logger.info(`[PLUGIN MANAGER] Plugin installed: ${pluginName} by ${req.session.user && req.session.user.username}`);
-  res.json({ success: true, message: `Plugin '${pluginName}' installed successfully` });
-}));
 
 // DELETE /rest/plugins/:name — uninstall a plugin
-app.delete('/rest/plugins/:name', User.isAuthenticated, User.requirePermission(PERMISSIONS.PLUGINS_MANAGE), asyncHandler(async (req, res) => {
-  const pluginName = req.params.name;
-  await pluginManager.uninstallPlugin(pluginName);
-  await require('./pluginRegistry.js').reload();
-  logger.info(`[PLUGIN MANAGER] Plugin uninstalled: ${pluginName} by ${req.session.user && req.session.user.username}`);
-  res.json({ success: true, message: `Plugin '${pluginName}' uninstalled successfully` });
-}));
+
 
 // =========================
 // USER MANAGEMENT PAGE
 // =========================
 
-app.get('/users.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), asyncHandler(async (req, res) => {
-  const users = await User.getAllUsers();
-  const smtpEnabledValue = serverConfig?.smtp?.enabled;
-  const smtpEnabled = smtpEnabledValue === true || String(smtpEnabledValue).toLowerCase() === 'true';
-  const smtpHostConfigured = typeof serverConfig?.smtp?.host === 'string' && serverConfig.smtp.host.trim().length > 0;
-  const smtpPortConfigured = serverConfig?.smtp?.port !== undefined && serverConfig.smtp.port !== null && String(serverConfig.smtp.port).trim().length > 0;
-  const smtpConfigured = smtpEnabled && smtpHostConfigured && smtpPortConfigured;
-  res.render('userManagement', {
-    users,
-    PERMISSIONS,
-    ROLE_PRESETS: User.ROLE_PRESETS,
-    DEFAULT_INVITED_PERMISSIONS: User.DEFAULT_INVITED_PERMISSIONS,
-    csrf: req.csrfToken(),
-    version,
-    smtpConfigured,
-  });
-}));
 
 // =========================
 // USER REST API
 // =========================
 
 // List all users (sanitised — no passwords)
-app.get('/rest/users', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), asyncHandler(async (req, res) => {
-  const users = await User.getAllUsers();
-  res.json(users);
-}));
+
 
 // Get single user (sanitised)
-app.get('/rest/users/:username', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), asyncHandler(async (req, res) => {
-  const user = await User.getUserByUsername(req.params.username.toLowerCase());
-  if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-  const { password, resetPasswordToken, resetPasswordExpires, inviteToken, inviteExpires, ...safe } = user;
-  res.json(safe);
-}));
+
 
 // Invite a new user (creates pending account + sends email)
-app.post('/rest/users/invite', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), express.json(), asyncHandler(async (req, res) => {
-  const { username, email, permissions } = req.body;
-  if (!username || !email) return res.status(400).json({ success: false, message: 'username and email are required' });
-  const smtpEnabledValue = serverConfig?.smtp?.enabled;
-  const smtpEnabled = smtpEnabledValue === true || String(smtpEnabledValue).toLowerCase() === 'true';
-  const smtpHostConfigured = typeof serverConfig?.smtp?.host === 'string' && serverConfig.smtp.host.trim().length > 0;
-  const smtpPortConfigured = serverConfig?.smtp?.port !== undefined && serverConfig.smtp.port !== null && String(serverConfig.smtp.port).trim().length > 0;
-  if (!(smtpEnabled && smtpHostConfigured && smtpPortConfigured)) {
-    return res.status(400).json({ success: false, message: 'SMTP must be enabled and configured before sending invites. Please configure SMTP in Settings.' });
-  }
-  const result = await User.createInvitedUser(username, email, permissions);
-  res.status(201).json({ success: true, message: 'User invited', username: result.user.username });
-}));
+
 
 // Resend invite
-app.post('/rest/users/:username/resend-invite', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), asyncHandler(async (req, res) => {
-  await User.regenerateInviteToken(req.params.username.toLowerCase());
-  res.json({ success: true, message: 'Invite resent' });
-}));
+
 
 // Update user permissions
-app.put('/rest/users/:username/permissions', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), express.json(), asyncHandler(async (req, res) => {
-  const { permissions } = req.body;
-  if (!Array.isArray(permissions)) return res.status(400).json({ success: false, message: 'permissions must be an array' });
-  await User.updateUserPermissions(req.params.username.toLowerCase(), permissions);
-  res.json({ success: true });
-}));
+
 
 // Activate a user
-app.put('/rest/users/:username/activate', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), asyncHandler(async (req, res) => {
-  await User.setUserActive(req.params.username.toLowerCase(), true);
-  res.json({ success: true });
-}));
+
 
 // Deactivate a user
-app.put('/rest/users/:username/deactivate', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), asyncHandler(async (req, res) => {
-  await User.setUserActive(req.params.username.toLowerCase(), false);
-  res.json({ success: true });
-}));
+
 
 // Admin-initiated password reset (sends reset email)
-app.post('/rest/users/:username/reset-password', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), asyncHandler(async (req, res) => {
-  await User.generateResetToken(req.params.username.toLowerCase());
-  res.json({ success: true, message: 'Password reset email sent' });
-}));
+
 
 // Delete a user (cannot delete super admin)
-app.delete('/rest/users/:username', User.isAuthenticated, User.requirePermission(PERMISSIONS.USERS_MANAGE), asyncHandler(async (req, res) => {
-  await User.deleteUser(req.params.username.toLowerCase());
-  res.json({ success: true });
-}));
-
 
 
 // =========================
@@ -4931,100 +1386,30 @@ app.delete('/rest/users/:username', User.isAuthenticated, User.requirePermission
  * Get value by key from custom data store
  * REQUIRES: User authentication + Sensitive data token
  */
-app.get('/rest/data/:key', User.isAuthenticated, validateSensitiveDataToken, asyncHandler(async (req, res) => {
-  try {
-    const value = await db.getData(req.params.key);
-    res.json({ key: req.params.key, value });
-  } catch (err) {
-    res.status(404).json({ success: false, message: 'Key not found' });
-  }
-}));
+
 
 /**
  * Create or update value by key in custom data store
  * REQUIRES: User authentication + Sensitive data token
  */
-app.put('/rest/data/:key', User.isAuthenticated, validateSensitiveDataToken, asyncHandler(async (req, res) => {
-  try {
-    await db.putData(req.params.key, req.body.value);
-    res.json({ success: true });
-  } catch (err) {
-    logger.error(`Error storing data [${req.params.key}]: ${err.message}`);
-    res.status(400).json({ success: false, message: `Error storing data: ${err.message}` });
-  }
-}));
+
 
 /**
  * Delete value by key from custom data store
  * REQUIRES: User authentication + Sensitive data token
  */
-app.delete('/rest/data/:key', User.isAuthenticated, validateSensitiveDataToken, asyncHandler(async (req, res) => {
-  try {
-    await db.deleteData(req.params.key);
-    res.json({ success: true });
-  } catch (err) {
-    logger.error(`Error deleting data [${req.params.key}]: ${err.message}`);
-    res.status(400).json({ success: false, message: `Error deleting data: ${err.message}` });
-  }
-}));
+
 
 //New scriptsList screen
-app.get('/scriptList.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.SCRIPTS_VIEW), asyncHandler(async (req, res) => {
-  var scriptsMeta = refreshScripts();
 
-  res.render('scriptList', {
-    agents: agents.getDict(),
-    scriptTestAgentsBase64: buildScriptTestAgentsBase64(),
-    scripts: scriptsMeta,
-    csrf: req.csrfToken(),
-  });
-}));
 
 /**
  * Orchestration UI pages
  */
-app.get('/orchestrationList.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  res.render('orchestrationList', { csrfToken: req.csrfToken() });
-}));
 
-app.get('/orchestrationBuilder.html', User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.ORCHESTRATIONS_CREATE, PERMISSIONS.ORCHESTRATIONS_EDIT]), asyncHandler(async (req, res) => {
-  const jobId = req.query.id; // undefined for new jobs, or specific ID for editing
-  var color = "#FF9800";
-  var icon = "workspaces";
-  var jobName = '';
-  var jobDescription = '';
-
-  if (jobId !== undefined && jobId !== '') {
-    try {
-      const job = await orchestration.getJob(jobId);
-      if (job) {
-        color = job.color || color;
-        icon = job.icon || icon;
-        jobName = job.name || '';
-        jobDescription = job.description || '';
-      }
-    } catch (e) {
-      logger.warn(`Could not load orchestration [${jobId}] for builder: ${e.message}`);
-    }
-  }
-
-  // Drawflow is now the primary orchestration builder UI
-  res.render('orchestrationBuilderDrawflow', {
-    csrfToken: req.csrfToken(),
-    icons: serverConfig.job_icons,
-    jobId: jobId || '',
-    jobName: jobName,
-    jobDescription: jobDescription,
-    color: color,
-    icon: icon
-  });
-}));
 
 // Legacy Drawflow URL — redirect to canonical builder path
-app.get('/orchestrationBuilderDrawflow.html', User.isAuthenticated, User.requireAnyPermission([PERMISSIONS.ORCHESTRATIONS_CREATE, PERMISSIONS.ORCHESTRATIONS_EDIT]), asyncHandler(async (req, res) => {
-  const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  res.redirect(302, '/orchestrationBuilder.html' + q);
-}));
+
 
 // In-memory cache for in-progress orchestration executions
 // These are temporary stub records that get replaced when execution completes
@@ -5084,199 +1469,79 @@ function clearInProgressExecution(jobId, executionId) {
 /**
  * Orchestration Monitor/Detail Routes
  */
-app.get('/orchestration/monitor.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const jobId = req.query.jobId;
-  let executionIndex = req.query.executionIndex || 'latest';
-  const executionId = req.query.executionId;
 
-  if (!jobId) {
-    return res.status(400).send('Job ID is required');
-  }
-
-  // Drawflow is now the primary orchestration monitor UI
-  res.render('orchestrationMonitorDrawflow', {
-    csrfToken: req.csrfToken(),
-    jobId: jobId,
-    executionIndex: executionIndex,
-    executionId: executionId
-  });
-}));
 
 // Legacy Drawflow monitor URL — redirect to canonical monitor path
-app.get('/orchestrationMonitorDrawflow.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const q = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  res.redirect(302, '/orchestration/monitor.html' + q);
-}));
 
-app.get('/orchestration/execution/details', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const orchestrationMonitor = require('./orchestrationMonitor.js');
-  const jobId = req.query.jobId;
-  let executionIndex = req.query.executionIndex || 'latest';
-  const executionId = req.query.executionId;
-  
-  if (!jobId) {
-    return res.status(400).json({ error: 'Job ID is required' });
-  }
-  
-  // Check if this is an in-progress execution in the cache
-  if (executionId) {
-    const cachedExecution = getInProgressExecution(jobId, executionId);
-    if (cachedExecution) {
-      logger.debug(`Found in-progress execution [${executionId}] in cache, building details`);
-      
-      // Build details from cached stub
-      try {
-        const orchestrationMonitor = require('./orchestrationMonitor.js');
-        const jobDef = await orchestrationMonitor.getJobDefinitionVersion(jobId, 'current');
-        
-        if (!jobDef) {
-          return res.status(404).json({ error: `Orchestration job [${jobId}] not found` });
-        }
-
-        // Fetch live logs from database for in-progress execute nodes
-        // on every request so selected-node detail panels can stay current.
-        const agents = require('./agents.js');
-        for (const node of jobDef.nodes) {
-          if (node.type === 'execute' && node.data && node.data.agent) {
-            const agentId = node.data.agent;
-            const agent = agents.getAgent(agentId);
-            if (agent) {
-              // Node is executing or recently completed, fetch latest logs from database
-              const jobName = `Orchestration [${jobId}] Execution [${executionId}] Node [${node.id}]`;
-              const logKey = `${agent.name}_${jobName}_${executionId}_log`;
-              try {
-                // Use simpleGetData to match agent's log storage mechanism
-                const logContent = await db.simpleGetData(logKey);
-                if (logContent) {
-                  // Initialize the scriptOutputs entry if not present
-                  if (!cachedExecution.scriptOutputs[node.id]) {
-                    cachedExecution.scriptOutputs[node.id] = {
-                      script: node.data.script || '',
-                      parameters: node.data.parameters || '',
-                      agent: agentId,
-                      status: 'in-progress'
-                    };
-                  }
-                  // Always update stdout with the latest persisted log snapshot.
-                  cachedExecution.scriptOutputs[node.id].stdout = logContent;
-                  logger.info(`[Orchestration Monitor] Fetched live logs for node [${node.id}] - ${logContent.length} bytes from key [${logKey}]`);
-                }
-              } catch (logErr) {
-                // Log file doesn't exist yet or error reading - that's fine
-                logger.debug(`[Orchestration Monitor] No logs yet for node [${node.id}]: ${logErr.message}`);
-              }
-            }
-          }
-        }
-        
-        // Format nodes with cached execution data (including fetched logs)
-        const formattedNodes = orchestrationMonitor.formatNodeDetails(jobDef.nodes, cachedExecution);
-        const formattedEdges = orchestrationMonitor.formatEdgeDetails(jobDef.edges, cachedExecution, cachedExecution.visitedNodes || []);
-        
-        return res.json({
-          jobId: jobDef.id,
-          jobName: jobDef.name,
-          description: jobDef.description || '',
-          orchestrationVersion: jobDef.version || 1,
-          execution: {
-            executionId: cachedExecution.executionId,
-            startTime: cachedExecution.startTime,
-            endTime: cachedExecution.endTime,
-            status: cachedExecution.status,
-            finalStatus: cachedExecution.finalStatus || 'unknown',
-            mode: orchestrationMonitor.getExecutionMode(cachedExecution),
-            triggerContext: cachedExecution.triggerContext || null,
-            triggerSummary: orchestrationMonitor.buildExecutionTriggerSummary(cachedExecution),
-            duration: cachedExecution.endTime ? 
-              new Date(cachedExecution.endTime) - new Date(cachedExecution.startTime) : null,
-            nodeMetrics: cachedExecution.nodeMetrics || {}
-          },
-          nodes: formattedNodes,
-          edges: formattedEdges,
-          nodeScriptOutputs: cachedExecution.scriptOutputs || {},
-          conditionEvaluations: cachedExecution.conditionEvaluations || {},
-          errors: cachedExecution.errors || [],
-          visitedNodes: cachedExecution.visitedNodes || [],
-          executionIndex: 'in-progress',
-          isInProgress: true
-        });
-      } catch (err) {
-        logger.error(`Error building details for cached execution: ${err.message}`);
-        // Fall through to normal execution history lookup
-      }
-    }
-  }
-  
-  // Normal execution history lookup (for completed executions)
-  // If executionId is provided, resolve it to an index
-  if (executionId && executionIndex === 'latest') {
-    logger.info(`[MONITOR] Resolving executionId [${executionId}] to index for job [${jobId}]`);
-    const index = await orchestrationEngine.getExecutionIndexById(jobId, executionId);
-    if (index >= 0) {
-      logger.info(`[MONITOR] Resolved executionId [${executionId}] to index [${index}]`);
-      executionIndex = index;
-    } else {
-      logger.warn(`[MONITOR] Failed to resolve executionId [${executionId}] - using latest instead`);
-    }
-  }
-  
-  const details = await orchestrationMonitor.getExecutionDetails(jobId, executionIndex);
-  res.json(details);
-}));
-
-app.get('/orchestration/node/output', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const orchestrationMonitor = require('./orchestrationMonitor.js');
-  const jobId = req.query.jobId;
-  const nodeId = req.query.nodeId;
-  let executionIndex = req.query.executionIndex || 'latest';
-  const executionId = req.query.executionId;
-  
-  if (!jobId || !nodeId) {
-    return res.status(400).json({ error: 'Job ID and Node ID are required' });
-  }
-  
-  // If executionId is provided, resolve it to an index
-  if (executionId && executionIndex === 'latest') {
-    const index = await orchestrationEngine.getExecutionIndexById(jobId, executionId);
-    if (index >= 0) {
-      executionIndex = index;
-    }
-  }
-  
-  const output = await orchestrationMonitor.getNodeOutput(jobId, nodeId, executionIndex);
-  res.json(output);
-}));
-
-app.get('/api/schedules/by-orchestration/:orchestrationId', User.isAuthenticated, User.requirePermission(PERMISSIONS.ORCHESTRATIONS_VIEW), asyncHandler(async (req, res) => {
-  const orchestrationId = req.params.orchestrationId;
-  
-  if (!orchestrationId) {
-    return res.status(400).json({ error: 'Orchestration ID is required' });
-  }
-  
-  // Get all schedules
-  const allSchedules = scheduler.getSchedules();
-  let matchingSchedules = [];
-  
-  try {
-    const schedules = Array.isArray(allSchedules) ? allSchedules : [];
-    
-    matchingSchedules = schedules.filter(schedule => 
-      schedule.scheduleMode === 'orchestration' && 
-      schedule.orchestrationId === orchestrationId
-    );
-  } catch (err) {
-    logger.warn('Error fetching schedules for orchestration:', err.message);
-    matchingSchedules = [];
-  }
-  
-  res.json({
-    success: true,
-    schedules: matchingSchedules
-  });
-}));
 
 // ============================================================================
+global.AppError = AppError;
+global.ENCRYPTION_KEY_NOTICE_TITLE = ENCRYPTION_KEY_NOTICE_TITLE;
+global.PERMISSIONS = PERMISSIONS;
+global.REPOSITORY_URL = REPOSITORY_URL;
+global.SCRIPT_FILENAME_REGEX = SCRIPT_FILENAME_REGEX;
+global.STORED_SECRET_MASK = STORED_SECRET_MASK;
+global.TemplateRepository = TemplateRepository;
+global.User = User;
+global.asyncHandler = asyncHandler;
+global.asyncUtils = asyncUtils;
+global.backupManager = backupManager;
+global.bcrypt = bcrypt;
+global.buildAgentInstallCommand = buildAgentInstallCommand;
+global.buildScriptTestAgentsBase64 = buildScriptTestAgentsBase64;
+global.clearInProgressExecution = clearInProgressExecution;
+global.confighandler = confighandler;
+global.docsRoot = docsRoot;
+global.express = express;
+global.getInProgressExecution = getInProgressExecution;
+global.getSchedulerData = getSchedulerData;
+global.getScriptTestRequestedBy = getScriptTestRequestedBy;
+global.getScriptUsageEntries = getScriptUsageEntries;
+global.getValidatedScriptPath = getValidatedScriptPath;
+global.importExportManager = importExportManager;
+global.loglines = loglines;
+global.logsStr = logsStr;
+global.marked = marked;
+global.maskPasswords = maskPasswords;
+global.minSupportedVersion = minSupportedVersion;
+global.normalizeScriptFilename = normalizeScriptFilename;
+global.parseScriptDescriptionFromContent = parseScriptDescriptionFromContent;
+global.parseScriptParameterBlock = parseScriptParameterBlock;
+global.path = path;
+global.pingIndividualRuntime = pingIndividualRuntime;
+global.pluginManager = pluginManager;
+global.readSavedScript = readSavedScript;
+global.refreshScripts = refreshScripts;
+global.replaceStoredSecret = replaceStoredSecret;
+global.resolveScriptPath = resolveScriptPath;
+global.safeRedirect = safeRedirect;
+global.saveInProgressExecution = saveInProgressExecution;
+global.appRoot = __dirname;
+Object.defineProperty(global, 'templates', {
+  configurable: true,
+  enumerable: true,
+  get() { return templates; },
+  set(value) { templates = value; },
+});
+global.updateInProgressExecution = updateInProgressExecution;
+global.upload = upload;
+global.validateCsrf = validateCsrf;
+global.validateSensitiveDataToken = validateSensitiveDataToken;
+global.version = version;
+require('./routes/auth')(app);
+require('./routes/pages')(app);
+require('./routes/jobs')(app);
+require('./routes/scripts')(app);
+require('./routes/agents')(app);
+require('./routes/settings')(app);
+require('./routes/webhooks')(app);
+require('./routes/notifications')(app);
+require('./routes/orchestration')(app);
+require('./routes/plugins')(app);
+require('./routes/users')(app);
+require('./routes/data')(app);
+require('./routes/debug')(app);
+
 // ERROR HANDLING MIDDLEWARE (must be registered last)
 // ============================================================================
 app.use(errorHandlerMiddleware);
@@ -5371,74 +1636,96 @@ async function notifyAgentsOfRestart() {
 
 //______________________________________________________________________________________________________
 
-var server = app.listen(port, async function () {
-  var host = server.address().address
-  var port = server.address().port
-  debug.startBanner(version);
-  logger.info("\x1b[32mListening on port: " + port);
-  //if(debug.enabled())debug.warn("DEBUG ENABLED");
-  logger.info("\x1b[32m----------------------------------------------------------------------------------------------\x1b[0m\n");
-  
+var server;
+
+(async () => {
+  let keyState;
   try {
+    keyState = await hubBootPromise;
     passman.checkKey();
-
-    await definitionStore.init(getDefinitionStoreConfig());
-    logger.info(`Definition store initialized using backend [${definitionStore.getBackend()}]`);
-
-    // Run idempotent user schema migration before accepting traffic
-    try {
-      await User.migrateUsers();
-    } catch (err) {
-      logger.error('User migration failed on startup — aborting:', err.message);
-      process.exit(1);
-    }
-
-    await scheduler.init();
-    logger.info('Scheduler initialized successfully');
-    
-    await orchestration.init();
-    logger.info('Orchestration module initialized successfully');
-
-    try {
-      await require('./pluginRegistry.js').init();
-      logger.info('Plugin registry initialized successfully');
-    } catch (pluginInitErr) {
-      logger.warn(`Plugin registry initialization failed (non-fatal): ${pluginInitErr.message}`);
-    }
-    try {
-      const migratedCount = await orchestration.migrateToVersionedFormat();
-      if (migratedCount > 0) {
-        logger.info(`Migrated ${migratedCount} orchestrations to versioned format`);
-      }
-    } catch (err) {
-      logger.error('Error during orchestration versioning migration:', err.message);
-    }
-    
-    hist.init();
-    //debug.Info("initiatilizing notification data");
-    await notificationData.init();
-    logger.debug('Initiatilizing notification data completed.');
-    
-    await running.init();
-    
-    // Notify all agents that the server has restarted
-    await notifyAgentsOfRestart();
   } catch (error) {
-    logger.error('Error during server startup initialization:', error.message);
+    logger.error('Error during hub boot:', error && error.message ? error.message : error);
+    process.exit(1);
   }
-})
-  
 
-//Initialize the Browser Comms websocket
-webSocketBrowser.init(server);
+  server = app.listen(port, async function () {
+    var host = server.address().address
+    var port = server.address().port
+    debug.startBanner(version);
+    logger.info("\x1b[32mListening on port: " + port);
+    //if(debug.enabled())debug.warn("DEBUG ENABLED");
+    logger.info("\x1b[32m----------------------------------------------------------------------------------------------\x1b[0m\n");
 
-//Init the templates
-if(serverConfig.templates && serverConfig.templates.enabled=="true"){
-  (async () => {
-    templates = new TemplateRepository(serverConfig.templates.repositoryUrl);
-    await templates.init();
-  })();
-}
-else{
-  logger.info("Template Scripts Disabled");
-}
+    try {
+      await definitionStore.init(getDefinitionStoreConfig());
+      logger.info(`Definition store initialized using backend [${definitionStore.getBackend()}]`);
+
+      // Run idempotent user schema migration before accepting traffic
+      try {
+        await User.migrateUsers();
+      } catch (err) {
+        logger.error('User migration failed on startup — aborting:', err.message);
+        process.exit(1);
+      }
+
+      await scheduler.init();
+      logger.info('Scheduler initialized successfully');
+
+      await orchestration.init();
+      logger.info('Orchestration module initialized successfully');
+
+      try {
+        await require('./pluginRegistry.js').init();
+        logger.info('Plugin registry initialized successfully');
+      } catch (pluginInitErr) {
+        logger.warn(`Plugin registry initialization failed (non-fatal): ${pluginInitErr.message}`);
+      }
+      try {
+        const migratedCount = await orchestration.migrateToVersionedFormat();
+        if (migratedCount > 0) {
+          logger.info(`Migrated ${migratedCount} orchestrations to versioned format`);
+        }
+      } catch (err) {
+        logger.error('Error during orchestration versioning migration:', err.message);
+      }
+
+      hist.init();
+      //debug.Info("initiatilizing notification data");
+      await notificationData.init();
+      logger.debug('Initiatilizing notification data completed.');
+
+      if (keyState && keyState.recommendChange) {
+        const existing = notificationData.getItems().some((item) => item && item.title === ENCRYPTION_KEY_NOTICE_TITLE);
+        if (!existing) {
+          notifier.sendNotification(
+            ENCRYPTION_KEY_NOTICE_TITLE,
+            'Stored secrets are still encrypted with the default key CHANGEIT. Open Settings and change the encryption key when you can.',
+            'WARNING',
+            '/settings.html'
+          );
+        }
+      }
+
+      await running.init();
+
+      // Notify all agents that the server has restarted
+      await notifyAgentsOfRestart();
+    } catch (error) {
+      logger.error('Error during server startup initialization:', error.message);
+    }
+  });
+
+  //Initialize the Browser Comms websocket
+  webSocketBrowser.init(server);
+
+  //Init the templates
+  if(serverConfig.templates && serverConfig.templates.enabled=="true"){
+    (async () => {
+      templates = new TemplateRepository(serverConfig.templates.repositoryUrl);
+      await templates.init();
+    })();
+  }
+  else{
+    logger.info("Template Scripts Disabled");
+  }
+})();

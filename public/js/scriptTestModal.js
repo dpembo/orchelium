@@ -28,57 +28,48 @@
     return textarea.scrollTop + textarea.clientHeight >= textarea.scrollHeight - 10;
   }
 
-  function normalizeParameterDocumentation(documentation) {
-    let params = typeof documentation === 'string' ? documentation.trim() : '';
+  function documentationFromScript(scriptContent) {
+    const lines = String(scriptContent || '').split('\n');
+    let inBlock = false;
+    let skippedDescription = false;
+    const docs = [];
 
-    if (!params) {
-      return 'No documented parameters';
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (line === '#start-params') {
+        inBlock = true;
+        continue;
+      }
+      if (line === '#end-params') {
+        break;
+      }
+      if (inBlock && line.startsWith('#')) {
+        const content = line.substring(1).trim();
+        if (!skippedDescription) {
+          skippedDescription = true;
+          continue;
+        }
+        docs.push(content);
+      }
     }
 
+    return docs.join('\n');
+  }
+
+  // Same treatment as the script editor's parameter panel: keep the HTML
+  // written in the script comments, and drop one leading <br> if present.
+  function documentedParameterHtml(parameters) {
+    let params = String(parameters || '').trim();
+    if (!params) {
+      return '';
+    }
     if (params.toLowerCase().indexOf('<br') === 0) {
       const pos = params.indexOf('>');
       if (pos !== -1) {
         params = params.substring(pos + 1).trim();
       }
     }
-
-    return params || 'No documented parameters';
-  }
-
-  // Sanitize HTML to prevent XSS attacks
-  // Only allows safe tags: <br>, <p>, <strong>, <em>, <code>, <ul>, <ol>, <li>
-  function sanitizeHTML(html) {
-    if (!html || typeof html !== 'string') {
-      return '';
-    }
-
-    const allowedTags = new Set(['BR', 'P', 'STRONG', 'EM', 'CODE', 'UL', 'OL', 'LI']);
-    const container = document.createElement('div');
-    container.innerHTML = html;
-
-    // Find all elements and process them
-    const allElements = container.querySelectorAll('*');
-    
-    // Process in reverse order to safely handle removals
-    for (let i = allElements.length - 1; i >= 0; i--) {
-      const element = allElements[i];
-      const tagName = element.tagName;
-      
-      if (!allowedTags.has(tagName)) {
-        // Remove non-whitelisted element but keep its content
-        const parent = element.parentNode;
-        while (element.firstChild) {
-          parent.insertBefore(element.firstChild, element);
-        }
-        parent.removeChild(element);
-      } else {
-        // For whitelisted elements, remove all attributes (prevents event handlers)
-        const attributesToRemove = Array.from(element.attributes).map(attr => attr.name);
-        attributesToRemove.forEach(name => element.removeAttribute(name));
-      }
-    }
-
-    return container.innerHTML;
+    return params;
   }
 
   const controller = {
@@ -150,6 +141,10 @@
 
     open: function(request) {
       this.currentRequest = Object.assign({}, request || {});
+      const fromScript = documentationFromScript(this.currentRequest.scriptContent);
+      if (fromScript) {
+        this.currentRequest.scriptParameters = fromScript;
+      }
       this.currentExecution = null;
       this.unsubscribeFromExecution();
       this.populateAgents();
@@ -163,6 +158,7 @@
 
       this.modalInstance.open();
       this.loadExistingState();
+      this.ensureParameterDocumentation();
     },
 
     resetModalState: function() {
@@ -190,7 +186,6 @@
 
     applyRequestMetadata: function() {
       const descriptionLabel = this.currentRequest ? (this.currentRequest.scriptDescription || '') : '';
-      const parametersHelp = this.currentRequest ? (this.currentRequest.scriptParameters || '') : '';
       const fileLabel = this.currentRequest && this.currentRequest.scriptName
         ? this.currentRequest.scriptName
         : 'Unsaved editor buffer';
@@ -201,9 +196,46 @@
       document.getElementById('scriptTestDescriptionLabel').textContent = descriptionLabel;
       document.getElementById('scriptTestFileLabel').textContent = fileLabel;
       document.getElementById('scriptTestSourceLabel').textContent = sourceLabel;
-      // Sanitize HTML to prevent XSS injection from script metadata
-      const sanitizedParams = sanitizeHTML(normalizeParameterDocumentation(parametersHelp));
-      document.getElementById('scriptTestParamsHelp').innerHTML = sanitizedParams;
+      this.renderParameterHelp();
+    },
+
+    renderParameterHelp: function() {
+      const parametersHelp = this.currentRequest ? (this.currentRequest.scriptParameters || '') : '';
+      const html = documentedParameterHtml(parametersHelp);
+      document.getElementById('scriptTestParamsHelp').innerHTML = html || 'No documented parameters';
+    },
+
+    ensureParameterDocumentation: async function() {
+      if (!this.currentRequest) {
+        return;
+      }
+
+      if (this.currentRequest.scriptName) {
+        try {
+          const response = await fetch('/rest/script/' + encodeURIComponent(this.currentRequest.scriptName) + '?mode=meta');
+          if (response.ok) {
+            const data = await response.json();
+            if (data && data.metaParameters) {
+              this.currentRequest.scriptParameters = data.metaParameters;
+            }
+            if (data && data.metaDescription) {
+              this.currentRequest.scriptDescription = data.metaDescription;
+              document.getElementById('scriptTestDescriptionLabel').textContent = data.metaDescription;
+            }
+          }
+        } catch (error) {
+          // Keep whatever documentation was already passed in.
+        }
+      }
+
+      if (!documentedParameterHtml(this.currentRequest.scriptParameters) && this.currentRequest.scriptContent) {
+        const fromScript = documentationFromScript(this.currentRequest.scriptContent);
+        if (fromScript) {
+          this.currentRequest.scriptParameters = fromScript;
+        }
+      }
+
+      this.renderParameterHelp();
     },
 
     buildStartPayload: function() {
@@ -299,9 +331,13 @@
       document.getElementById('scriptTestSourceLabel').textContent = execution.sourceType === 'saved'
         ? 'Saved file'
         : 'Current editor contents';
-      document.getElementById('scriptTestParamsHelp').innerHTML = normalizeParameterDocumentation(
-        execution.scriptParameters || (this.currentRequest ? this.currentRequest.scriptParameters || '' : '')
-      );
+      if (execution.scriptParameters) {
+        if (!this.currentRequest) {
+          this.currentRequest = {};
+        }
+        this.currentRequest.scriptParameters = execution.scriptParameters;
+      }
+      this.renderParameterHelp();
       document.getElementById('scriptTestExecutionId').textContent = execution.executionId || '-';
 
       const select = document.getElementById('scriptTestAgentSelect');

@@ -56,8 +56,8 @@ Set using `-e NAME=value` on `docker run`, or under `environment:` in Docker Com
 | Environment Variable | Description | Example |
 |---|---|---|
 | TZ | Time zone to ensure the container operates in your correct time zone for display of date/times.  Time zone names follow the standard IANA database, of which you can find a list via [wikipedia](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)| Europe/London |
-| ORCHELIUM_ENCRYPTION_KEY | This variable is used to provide the encryption key used between the Hub and Agents to ensure the data/commmands cannot be compromised, or the link from agent to server be misued.  This has a default value, but its recommended to change this.  Note that the environment variable has to be set the same on the server and any environment where an agent is deployed for the communication to work correctly|MySecretKey|
-| ORCHELIUM_KEY_ENFORCE | Controls server behaviour when `ORCHELIUM_ENCRYPTION_KEY` is not set (i.e. the default key `CHANGEIT` is in use). Accepted values: `strict` — server refuses to start; `warn` (default) — server starts but logs a prominent warning; `silent` — server starts with no warning (not recommended outside development). This variable must be set consistently on both the server and all agents. | `warn` |
+| ORCHELIUM_ENCRYPTION_KEY | Optional override for the hub data-encryption key stored in `data/encryption-key`. When unset, a new install gets a random key. An existing install that already has encrypted secrets and no key file keeps `CHANGEIT` until you change it in Settings. While this variable is set, Settings cannot change the key. Agents that still verify enrollment with the hub key need the same value. |MySecretKey|
+| ORCHELIUM_KEY_ENFORCE | Controls hub behaviour when the live encryption key is still the default `CHANGEIT`. Accepted values: `strict` — server refuses to start; `warn` (default) — server starts but logs a prominent warning; `silent` — server starts with no warning (not recommended outside development). | `warn` |
 
 #### Docker Compose
 
@@ -205,6 +205,8 @@ Then press submit, and your agent will be added
 
 **Congratulations, you've added your first agent!**
 
+Approving a current agent also creates a connection token. The edit page shows it once so it can be copied, and a WebSocket agent that is still connected stores it automatically. See [Agent connection tokens](./agent-connection-token.md).
+
 ---
 
 ## Related Documentation
@@ -213,6 +215,7 @@ Then press submit, and your agent will be added
 - [Job Schedules](./backup-schedules.md): Creating and managing schedules
 - [Orchestrations](./orchestrations.md): Building complex  workflows
 - [Settings Configuration](./settings-config.md): Server and agent configuration
+- [Agent connection tokens](./agent-connection-token.md): Identity check for approved agents
 - [User Management](./user-management.md): User accounts and permissions
 - [REST API Reference](./REST_API_REFERENCE.md): Programmatic access
 - [Back to Documentation Index](./README.MD)

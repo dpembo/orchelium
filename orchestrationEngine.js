@@ -11,6 +11,7 @@ const axios = require('axios');
 const notifier = require('./notify.js');
 const wsBrowser = require('./communications/wsBrowserTransport.js');
 const triggerContext = require('./triggerContext.js');
+const { resolveScriptPath } = require('./utils/scriptFilename.js');
 
 // Global store for pending script executions
 // Keyed by jobName (which includes orchestration jobId, executionId, and node id)
@@ -738,16 +739,25 @@ async function executeJob(jobId, isManual = false, executionId = null, onNodeCom
               logger.debug(`[ORCHESTRATION] No existing log to clear for key [${logKey}]: ${clearErr.message}`);
             }
 
-            const fullScriptPath = `./scripts/${scriptPath}`;
-            logger.info(`Reading script content from [${fullScriptPath}]`);
+            const fullScriptPath = resolveScriptPath(scriptPath);
+            if (fullScriptPath) {
+              logger.info(`Reading script content from [${fullScriptPath}]`);
+            }
 
             let scriptContent;
             try {
+              if (!fullScriptPath) {
+                const outsideErr = new Error('Script path is outside the scripts directory');
+                outsideErr.code = 'EOUTSIDE';
+                throw outsideErr;
+              }
               scriptContent = await fs.readFile(fullScriptPath, 'utf8');
             } catch (readErr) {
-              const scriptReadMessage = (readErr && readErr.code === 'ENOENT')
-                ? `Script cannot be found: [${fullScriptPath}]`
-                : `Failed to read script [${fullScriptPath}]: ${readErr.message}`;
+              const scriptReadMessage = (readErr && readErr.code === 'EOUTSIDE')
+                ? 'Script path is outside the scripts directory'
+                : (readErr && readErr.code === 'ENOENT')
+                  ? `Script cannot be found: [${fullScriptPath}]`
+                  : `Failed to read script [${fullScriptPath}]: ${readErr.message}`;
 
               const failureTime = new Date().toISOString();
               const scriptReadErrOutput = {

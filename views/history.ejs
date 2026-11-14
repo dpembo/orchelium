@@ -656,6 +656,23 @@ tbody tr.orch-expanded td {
     });
   }
 
+  function postJobAction(url, fields) {
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = url;
+    function add(name, value) {
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value == null ? '' : value;
+      form.appendChild(input);
+    }
+    add('_csrf', <%- JSON.stringify(typeof csrf !== 'undefined' ? csrf : '') %>);
+    Object.keys(fields || {}).forEach(function (key) { add(key, fields[key]); });
+    document.body.appendChild(form);
+    form.submit();
+  }
+
   function runClassicJobFromHistory(jobname, executionId) {
     // First, mark the original execution as having been re-run
     $.ajax({
@@ -668,7 +685,11 @@ tbody tr.orch-expanded td {
         if (data.success) {
           console.log('Marked classic job execution as re-run');
           // Now run the job
-          window.location.href = `/runSchedule.html?jobname=${encodeURIComponent(jobname)}&rerunFrom=${encodeURIComponent(executionId)}&redir=${encodeURIComponent('/history.html')}`;
+          postJobAction('/runSchedule.html', {
+            jobname: jobname,
+            rerunFrom: executionId,
+            redir: '/history.html'
+          });
         } else {
           M.toast({ html: 'Failed to mark as re-run' });
         }

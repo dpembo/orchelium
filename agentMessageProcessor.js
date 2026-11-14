@@ -1,4 +1,4 @@
-const { TOPICS } = require('./shared/protocol');
+const { TOPICS, AGENT_CAPABILITIES } = require('./shared/protocol');
 const status_topic = TOPICS.status;
 const agentAuth = require('./communications/agentAuth');
 const EventEmitter = require('events');
@@ -59,6 +59,9 @@ async function processMessage(topic, message, protocol, socketAgentId) {
     if (Array.isArray(obj.capabilities)) {
       const capabilityAgent = agents.getAgent(obj.name);
       if (capabilityAgent) capabilityAgent.capabilities = obj.capabilities;
+      if (obj.capabilities.indexOf(AGENT_CAPABILITIES.COMMAND_KEY) !== -1) {
+        agentAuth.noteCommandKey(obj.name);
+      }
     }
 
     logger.debug(`Received message on Protocol: '${protocol}' with topic '${topic}': ${message.toString()}`);

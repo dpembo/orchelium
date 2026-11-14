@@ -56,6 +56,7 @@ const crypto = require('crypto');
 const dateTimeUtils = require('./utils/dateTimeUtils.js');
 const asyncUtils = require('./utils/asyncUtils.js');
 const { handleError, AppError } = require('./utils/errorHandler.js');
+const { resolveScriptPath } = require('./utils/scriptFilename.js');
 const running = require('./running.js');
 const triggerContext = require('./triggerContext.js');
 
@@ -715,8 +716,13 @@ async function runJob(jobName, isManual, inData, triggerContextParam = null, rer
     logger.info(`Generated execution ID for job [${jobName}]: ${executionId}`);
     
     if (command !== undefined && command !== null && command.length > 0) {
+      const scriptPath = resolveScriptPath(command);
       try {
-        const scriptPath = "./scripts/" + command;
+        if (!scriptPath) {
+          const outsideErr = new Error('Script path is outside the scripts directory');
+          outsideErr.code = 'EOUTSIDE';
+          throw outsideErr;
+        }
         const data = await fs.readFile(scriptPath, 'utf8');
         logger.debug('Script file content loaded successfully');
 
@@ -726,11 +732,11 @@ async function runJob(jobName, isManual, inData, triggerContextParam = null, rer
         
         publishExecute(schedItem.agent, data, commandParams, jobName, isManual, executionId, triggerContextParam, rerunFrom);
       } catch (err) {
-        const scriptPath = `./scripts/${command}`;
-        const missingScriptMsg = `Script cannot be found for job [${jobName}] at path [${scriptPath}]`;
-        const logMessage = (err && err.code === 'ENOENT')
-          ? missingScriptMsg
-          : `Failed to read script for job [${jobName}] at path [${scriptPath}]: ${err.message}`;
+        const logMessage = (err && err.code === 'EOUTSIDE')
+          ? `Script path for job [${jobName}] is outside the scripts directory`
+          : (err && err.code === 'ENOENT')
+            ? `Script cannot be found for job [${jobName}] at path [${scriptPath}]`
+            : `Failed to read script for job [${jobName}] at path [${scriptPath}]: ${err.message}`;
 
         logger.error(logMessage);
 

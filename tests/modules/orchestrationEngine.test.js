@@ -1504,6 +1504,34 @@ describe('Orchestration Engine Module', () => {
         expect(result.errors[0].message).toContain('no agent');
       });
 
+      it('should refuse to read a script path outside scripts/', async () => {
+        const mockJob = createMockJob({
+          versions: [
+            {
+              nodes: [
+                { id: 'start-node', type: 'start', data: { name: 'Start' } },
+                { id: 'execute-node', type: 'execute', data: { script: '../data/server-config.json', agent: 'agent1', parameters: '' } },
+                { id: 'end-node', type: 'end-success', data: { name: 'End Success' } },
+              ],
+              edges: [
+                { from: 'start-node', fromPort: 'out', to: 'execute-node' },
+                { from: 'execute-node', fromPort: 'out', to: 'end-node' },
+              ],
+            },
+          ],
+        });
+        db.getData.mockResolvedValue({ 'test-job': mockJob });
+        require('fs').promises.readFile.mockClear();
+        global.agentComms.sendCommand.mockClear();
+
+        const result = await orchestrationEngine.executeJob('test-job', false, 'test-exec1');
+
+        expect(result.status).toBe('failed');
+        expect(result.errors[0].message).toContain('outside the scripts directory');
+        expect(require('fs').promises.readFile).not.toHaveBeenCalled();
+        expect(global.agentComms.sendCommand).not.toHaveBeenCalled();
+      });
+
       it('should throw error when script file not found', async () => {
         const mockJob = createMockJob();
         db.getData.mockResolvedValue({ 'test-job': mockJob });

@@ -19,6 +19,7 @@ const COMMANDS = Object.freeze({
 
 const AGENT_CAPABILITIES = Object.freeze({
   TOKEN: 'agent-token',
+  COMMAND_KEY: 'command-key',
 });
 
 const STATUS = Object.freeze({

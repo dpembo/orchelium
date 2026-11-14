@@ -58,6 +58,7 @@ async function handleCommand(message) {
         debug(DEBUG_LEVEL.ERROR, `Could not open rotated connection token: ${err.message}`);
         return;
       }
+      runtime.previousAgentToken = runtime.AGENT_TOKEN;
       writeSetting('AGENT_TOKEN', nextToken);
       debug(DEBUG_LEVEL.INFO, 'Stored rotated connection token');
       publishStatusUpdate('token_ack', 'Connection token updated');

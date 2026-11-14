@@ -98,6 +98,15 @@ function addDateSuffix(date) {
   
   <script>
 
+  var scriptDocs = <%- JSON.stringify((scripts || []).reduce(function(map, item) {
+    if (item && item.data && item.data.filename) {
+      map[item.data.filename] = {
+        description: item.data.metaDescription || '',
+        parameters: item.data.metaParameters || ''
+      };
+    }
+    return map;
+  }, {})).replace(/</g, '\\u003c') %>;
   var scriptSort = null;
   var scriptOrder = null;
   var pendingDeleteScriptName = null;
@@ -369,16 +378,17 @@ function addDateSuffix(date) {
       });
   }
 
-  function openScriptTestFromList(scriptName, scriptDescription, scriptParameters) {
+  function openScriptTestFromList(scriptName) {
     if (!window.BackupHubScriptTest) {
       M.toast({html: 'Script test UI is not ready yet', displayLength: 3000});
       return;
     }
 
+    var known = scriptDocs[scriptName] || {};
     window.BackupHubScriptTest.open({
       scriptName: scriptName,
-      scriptDescription: scriptDescription || '',
-      scriptParameters: scriptParameters || '',
+      scriptDescription: known.description || '',
+      scriptParameters: known.parameters || '',
       sourceType: 'saved',
       scriptContent: '',
       commandParams: '',
@@ -594,7 +604,7 @@ function addDateSuffix(date) {
                   <a title="edit" href="/scriptEditor.html?index=<%= i %>"><i class="material-icons tableIconButton vertMid">edit</i></a>
                   <% } %>
                   <% if (hasPerm('scripts.test')) { %>
-                  <a title="test" href="#" data-script-name="<%=scripts[i].data.filename%>" data-script-description="<%=scripts[i].data.metaDescription || ''%>" data-script-parameters="<%=scripts[i].data.metaParameters || ''%>" onclick="openScriptTestFromList(this.dataset.scriptName, this.dataset.scriptDescription, this.dataset.scriptParameters); return false;"><i class="material-icons tableIconButton vertMid">fact_check</i></a>
+                  <a title="test" href="#" data-script-name="<%=scripts[i].data.filename%>" onclick="openScriptTestFromList(this.dataset.scriptName); return false;"><i class="material-icons tableIconButton vertMid">fact_check</i></a>
                   <% } %>
                   <% if (hasPerm('scripts.delete')) { %>
                   <a title="delete" href="#" data-script-name="<%=scripts[i].data.filename%>" onclick="openDeleteScriptModal(this.dataset.scriptName); return false;"><i class="material-icons tableIconButton vertMid">delete</i></a>

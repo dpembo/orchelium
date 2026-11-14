@@ -79,6 +79,17 @@ describe('Agent Message Processor - Notification Logic', () => {
 
     global.agents = agentsModule;
     global.db = db;
+    const passman = require('../../passman');
+    passman.setEncryptionSecret('message-processor-test-key');
+    const agentAuth = require('../../communications/agentAuth');
+    if (!agentAuth.authorizeMessage.__tokenlessTestBypass) {
+      const realAuthorize = agentAuth.authorizeMessage.bind(agentAuth);
+      jest.spyOn(agentAuth, 'authorizeMessage').mockImplementation((name, token) => {
+        if (token) return realAuthorize(name, token);
+        return { ok: true };
+      });
+      agentAuth.authorizeMessage.__tokenlessTestBypass = true;
+    }
     global.notifier = notifier;
     global.running = running;
     global.history = history;
@@ -134,6 +145,13 @@ describe('Agent Message Processor - Notification Logic', () => {
     delete global.history;
     delete global.hist;
     delete global.agentStats;
+  });
+
+  afterAll(() => {
+    const agentAuth = require('../../communications/agentAuth');
+    if (typeof agentAuth.authorizeMessage.mockRestore === 'function') {
+      agentAuth.authorizeMessage.mockRestore();
+    }
   });
 
   describe('pong status handling', () => {
@@ -452,7 +470,7 @@ describe('Agent Message Processor - Notification Logic', () => {
 
     it('should reject a message when the agent token does not match', async () => {
       const agentAuth = require('../../communications/agentAuth');
-      const token = agentAuth.issue('secured-agent');
+      const token = await agentAuth.issue('secured-agent');
       agentsModule.getAgent.mockReturnValue({ name: 'secured-agent', status: 'online' });
 
       try {
@@ -466,13 +484,13 @@ describe('Agent Message Processor - Notification Logic', () => {
         expect(agentsModule.updateAgentStatus).not.toHaveBeenCalled();
         expect(token).not.toBe('wrong-token');
       } finally {
-        agentAuth.forget('secured-agent');
+        await agentAuth.forget('secured-agent');
       }
     });
 
     it('should accept a message with the issued token and not keep the token in the stored payload', async () => {
       const agentAuth = require('../../communications/agentAuth');
-      const token = agentAuth.issue('secured-agent');
+      const token = await agentAuth.issue('secured-agent');
       agentsModule.getAgent.mockReturnValue({ name: 'secured-agent', status: 'online' });
       running.getRunningCountForAgent.mockReturnValue(0);
 
@@ -488,7 +506,7 @@ describe('Agent Message Processor - Notification Logic', () => {
         const storedMessage = agentsModule.updateAgentStatus.mock.calls[0][6];
         expect(storedMessage).not.toContain(token);
       } finally {
-        agentAuth.forget('secured-agent');
+        await agentAuth.forget('secured-agent');
       }
     });
 

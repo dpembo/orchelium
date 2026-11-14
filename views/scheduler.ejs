@@ -88,20 +88,23 @@ function noValue(inValue){
 
   function newCommand(select)
   {
-    var url = "/rest/script/" + select.value;
+    var url = "/rest/script/" + encodeURIComponent(select.value) + "?mode=meta";
     if(select.value=="")
     {
       document.getElementById('scriptInfoDetail').innerHTML="";
       return;
     }
-    fetchApiData(url)
+    fetch(url)
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      return response.json();
+    })
     .then(data => {
-      // Handle the API data as a string here
-      //console.log(data);
-      document.getElementById('scriptInfoDetail').innerHTML=extractHTMLParams(data);
+      document.getElementById('scriptInfoDetail').innerHTML = data.documentationHtml || '';
     })
     .catch(error => {
-      // Handle errors here or display them to the user
       console.error('Error:', error);
       document.getElementById('scriptInfoDetail').innerHTML="";
     });
@@ -186,17 +189,30 @@ function noValue(inValue){
       //document.getElementById('colour').display="block";
     });
 
+    function postJobAction(url, fields) {
+      var form = document.createElement('form');
+      form.method = 'POST';
+      form.action = url;
+      function add(name, value) {
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value == null ? '' : value;
+        form.appendChild(input);
+      }
+      add('_csrf', <%- JSON.stringify(csrf || '') %>);
+      Object.keys(fields || {}).forEach(function (key) { add(key, fields[key]); });
+      document.body.appendChild(form);
+      form.submit();
+    }
+
     function doDelete()
     {
-      //alert("Doing delete");
-      // Get all input fields with validation classes
       const inputFields = document.querySelectorAll('.validate');
-
-      // Remove validation classes from input fields
       inputFields.forEach(input => {
         input.classList.remove('valid', 'invalid');
       });
-      document.location.replace("/delete-schedule.html?jobName=<%=getSchedule().jobName%>");
+      postJobAction('/delete-schedule.html', { jobName: <%- JSON.stringify(getSchedule().jobName) %> });
     }
     function doCancel()
     {

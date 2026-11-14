@@ -141,7 +141,8 @@ All REST API endpoints require authentication unless otherwise noted. Orchelium 
   - REST API routes (those starting with `/rest` or `/api`) do **not** require CSRF tokens and are excluded from CSRF validation.
 
 - **Public vs. Protected Routes:**
-  - Public: `/login.html`, `/register.html`, `/forgot.html`, `/saveScript`, `/reset/...`
+  - Public: `/login.html`, `/register.html`, `/forgot.html`, `/reset/...`
+  - `POST /saveScript` requires a session with `scripts.create` or `scripts.edit`, and an `X-CSRF-Token` header.
   - All other routes require authentication.
 
 - **Example Authentication Flow:**

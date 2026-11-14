@@ -415,6 +415,45 @@ describe('Scheduler Module', () => {
       );
     });
 
+    it('should refuse to read a script path outside scripts/', async () => {
+      db.getData.mockResolvedValue([
+        {
+          jobName: 'test-job',
+          description: 'Test Job',
+          agent: 'test-agent',
+          command: '../data/server-config.json',
+          commandParams: '',
+          scheduleType: 'daily',
+          scheduleTime: '12:00',
+          scheduleMode: 'classic',
+        },
+      ]);
+      await scheduler.init();
+      mockAgents.getAgent.mockReturnValue({
+        name: 'test-agent',
+        status: 'online',
+      });
+      fs.promises.readFile.mockClear();
+      global.agentComms.sendCommand.mockClear();
+
+      const result = await scheduler.runJob('test-job', true);
+
+      expect(result.status).toBe('error');
+      expect(result.executionId).toBeNull();
+      expect(fs.promises.readFile).not.toHaveBeenCalled();
+      expect(global.agentComms.sendCommand).not.toHaveBeenCalled();
+      expect(mockHistory.createHistoryItem).toHaveBeenCalledWith(
+        'test-job',
+        expect.any(String),
+        1,
+        0,
+        expect.stringContaining('outside the scripts directory'),
+        true,
+        expect.any(String),
+        null
+      );
+    });
+
     it('should handle script file read errors', async () => {
       mockAgents.getAgent.mockReturnValue({
         name: 'test-agent',

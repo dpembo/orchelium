@@ -67,6 +67,7 @@ const runtime = {
   MQTT_USERNAME: mqttUsernameIndex !== -1 ? process.argv[mqttUsernameIndex + 1] : '',
   MQTT_PASSWORD: mqttPasswordIndex !== -1 ? process.argv[mqttPasswordIndex + 1] : '',
   AGENT_TOKEN: agentTokenIndex !== -1 ? process.argv[agentTokenIndex + 1] : '',
+  previousAgentToken: '',
   MQTT_ENABLED: process.argv.includes('--mqttServer'),
   WS_SERVER: wsServerIndex !== -1 ? process.argv[wsServerIndex + 1] : DEFAULT_WS_SERVER,
   WS_SERVER_PORT: wsPortIndex !== -1 ? process.argv[wsPortIndex + 1] : DEFAULT_WS_SERVER_PORT,

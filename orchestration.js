@@ -5,6 +5,24 @@
  */
 
 const definitionStore = require('./definitionStore.js');
+const { resolveScriptPath } = require('./utils/scriptFilename.js');
+
+function assertExecuteScriptsConfined(nodes) {
+  if (!Array.isArray(nodes)) return;
+  for (const node of nodes) {
+    if (!node || node.type !== 'execute') continue;
+    const executeType = String((node.data && node.data.executeType) || 'script').toLowerCase();
+    if (executeType === 'http') continue;
+    const script = node.data && node.data.script;
+    if (typeof script !== 'string' || !script.trim()) continue;
+    if (!resolveScriptPath(script)) {
+      const err = new Error('Script path is outside the scripts directory');
+      err.statusCode = 400;
+      err.code = 'EOUTSIDE';
+      throw err;
+    }
+  }
+}
 
 /**
  * Initialize orchestration by loading from definition store
@@ -139,6 +157,7 @@ function getJobWithVersion(job) {
 async function saveJob(jobId, jobDefinition) {
   try {
     logger.info(`Saving orchestration job [${jobId}]`);
+    assertExecuteScriptsConfined(jobDefinition && jobDefinition.nodes);
     
     const jobs = await getAllJobs();
     const now = new Date().toISOString();

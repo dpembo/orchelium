@@ -17,19 +17,45 @@ function safeEqual(left, right) {
   return crypto.timingSafeEqual(a, b);
 }
 
+let writeChain = Promise.resolve();
+
+function logCredentialError(err) {
+  if (typeof logger !== 'undefined' && logger) {
+    logger.error(`Failed to store agent credentials: ${err.message}`);
+  }
+}
+
+function rememberRecord(name) {
+  if (!Object.prototype.hasOwnProperty.call(store, name)) return { existed: false };
+  return { existed: true, record: cloneStore(store[name]) };
+}
+
+function restoreRecord(name, previous) {
+  if (!previous.existed) delete store[name];
+  else store[name] = previous.record;
+}
+
+/**
+ * Write the credential map after earlier writes. The snapshot is taken when
+ * this write runs, so a later change is not overwritten by an older one.
+ */
 function persist() {
-  try {
+  const run = writeChain.then(async () => {
     const db = require('../db');
     if (!db || typeof db.putData !== 'function') return;
-    db.putData(DB_KEY, store).catch((err) => {
-      if (typeof logger !== 'undefined' && logger) {
-        logger.error(`Failed to store agent credentials: ${err.message}`);
-      }
-    });
+    await db.putData(DB_KEY, cloneStore(store));
+  });
+  writeChain = run.then(() => {}, () => {});
+  return run;
+}
+
+async function commitRecord(name, previous) {
+  try {
+    await persist();
   } catch (err) {
-    if (typeof logger !== 'undefined' && logger) {
-      logger.error(`Failed to store agent credentials: ${err.message}`);
-    }
+    restoreRecord(name, previous);
+    logCredentialError(err);
+    throw err;
   }
 }
 
@@ -55,14 +81,12 @@ function supportsAgentToken(agent) {
 /**
  * Decide what a new WebSocket may do.
  * A valid token may replace the live socket. Anything else must not.
- * Agents approved before tokens existed may take a free socket, once.
+ * An approved agent with no credential is rejected. A new name can still register.
  */
 function decideConnection({ agentStatus, hasCredential: credentialPresent, tokenValid, liveSocket, pendingSocket }) {
   if (tokenValid) return 'approve-replace';
   if (credentialPresent) return 'reject';
-  if (agentStatus && agentStatus !== 'register') {
-    return liveSocket ? 'reject' : 'legacy-accept';
-  }
+  if (agentStatus && agentStatus !== 'register') return 'reject';
   if (liveSocket || pendingSocket) return 'reject';
   return 'pending-accept';
 }
@@ -73,11 +97,15 @@ function presentedTokenMatches(name, token) {
   if (!record) return false;
   const hash = hashToken(token);
   if (record.pendingTokenHash && safeEqual(hash, record.pendingTokenHash)) {
+    const previous = rememberRecord(name);
     record.tokenHash = record.pendingTokenHash;
     record.tokenEnc = record.pendingTokenEnc;
     record.pendingTokenHash = null;
     record.pendingTokenEnc = null;
-    persist();
+    persist().catch((err) => {
+      restoreRecord(name, previous);
+      logCredentialError(err);
+    });
     return true;
   }
   return Boolean(record.tokenHash && safeEqual(hash, record.tokenHash));
@@ -88,23 +116,35 @@ function authorizeMessage(name, token) {
     if (presentedTokenMatches(name, token)) return { ok: true };
     return { ok: false, reason: 'connection token rejected' };
   }
+  let agent = null;
+  try {
+    if (typeof agents !== 'undefined' && agents && typeof agents.getAgent === 'function') {
+      agent = agents.getAgent(name);
+    }
+  } catch (err) {
+    agent = null;
+  }
+  if (agent && agent.status && agent.status !== 'register') {
+    return { ok: false, reason: 'agent has no connection token' };
+  }
   return { ok: true };
 }
 
-function issue(name) {
+async function issue(name) {
   const token = crypto.randomBytes(32).toString('hex');
   const passman = require('../passman');
+  const previous = rememberRecord(name);
   store[name] = {
     tokenHash: hashToken(token),
     tokenEnc: passman.encrypt(token),
     pendingTokenHash: null,
     pendingTokenEnc: null,
   };
-  persist();
+  await commitRecord(name, previous);
   return token;
 }
 
-function beginRotation(name) {
+async function beginRotation(name) {
   const record = store[name];
   if (!record || !record.tokenEnc) {
     throw new Error('Agent has no connection token');
@@ -112,18 +152,20 @@ function beginRotation(name) {
   const passman = require('../passman');
   const current = passman.decrypt(record.tokenEnc);
   const next = crypto.randomBytes(32).toString('hex');
+  const previous = rememberRecord(name);
   record.pendingTokenHash = hashToken(next);
   record.pendingTokenEnc = passman.encrypt(next);
-  persist();
+  await commitRecord(name, previous);
   return sealSecret(next, current);
 }
 
-function cancelRotation(name) {
+async function cancelRotation(name) {
   const record = store[name];
   if (!record) return;
+  const previous = rememberRecord(name);
   record.pendingTokenHash = null;
   record.pendingTokenEnc = null;
-  persist();
+  await commitRecord(name, previous);
 }
 
 function reveal(name) {
@@ -136,10 +178,77 @@ function reveal(name) {
   };
 }
 
-function forget(name) {
+function cloneStore(source) {
+  return JSON.parse(JSON.stringify(source));
+}
+
+function reencryptCredentialCopy(source, oldSecret, newSecret) {
+  const passman = require('../passman');
+  const next = cloneStore(source);
+  for (const record of Object.values(next)) {
+    if (!record || typeof record !== 'object') continue;
+    if (record.tokenEnc) {
+      record.tokenEnc = passman.encrypt(passman.decrypt(record.tokenEnc, oldSecret), newSecret);
+    }
+    if (record.pendingTokenEnc) {
+      record.pendingTokenEnc = passman.encrypt(passman.decrypt(record.pendingTokenEnc, oldSecret), newSecret);
+    }
+  }
+  return next;
+}
+
+async function replaceCredentialStore(next) {
+  const previous = cloneStore(store);
+  store = next;
+  try {
+    await persist();
+  } catch (err) {
+    store = previous;
+    logCredentialError(err);
+    throw err;
+  }
+  return previous;
+}
+
+function currentCredentialStore() {
+  return cloneStore(store);
+}
+
+async function forget(name) {
   if (!store[name]) return;
+  const previous = rememberRecord(name);
   delete store[name];
-  persist();
+  await commitRecord(name, previous);
+}
+
+function noteCommandKey(name) {
+  const record = store[name];
+  if (!record || record.commandKey) return;
+  record.commandKey = true;
+  persist().catch((err) => {
+    if (store[name] === record) record.commandKey = false;
+    logCredentialError(err);
+  });
+}
+
+/**
+ * Sign a hub-to-agent command. An agent that has reported the command-key
+ * capability is signed with its credential. Enrollment, older agents, and
+ * agents with no credential use the hub key. MQTT and WebSocket both send
+ * the result of this function.
+ */
+function signCommand(payload, expiryHours) {
+  const passman = require('../passman');
+  const name = payload && payload.name;
+  const record = name && store[name];
+  if (record && record.commandKey && record.tokenEnc) {
+    const current = reveal(name);
+    if (!current || !current.token) {
+      throw new Error(`Agent ${name} has a credential that cannot sign commands`);
+    }
+    return passman.createJWTToken(payload, expiryHours, current.token);
+  }
+  return passman.createJWTToken(payload, expiryHours);
 }
 
 module.exports = {
@@ -154,5 +263,10 @@ module.exports = {
   cancelRotation,
   reveal,
   forget,
+  noteCommandKey,
+  signCommand,
+  currentCredentialStore,
+  reencryptCredentialCopy,
+  replaceCredentialStore,
   hashToken,
 };

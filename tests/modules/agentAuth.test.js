@@ -1,4 +1,9 @@
+process.env.ORCHELIUM_ENCRYPTION_KEY = 'agent-auth-test-key';
+process.env.ORCHELIUM_KEY_ENFORCE = 'silent';
+
+const jwt = require('jsonwebtoken');
 const { sealSecret, openSecret } = require('../../shared/secretBox');
+const { padStringTo256Bits } = require('../../shared/keyMaterial');
 const agentAuth = require('../../communications/agentAuth');
 
 describe('agent connection decisions', () => {
@@ -30,22 +35,31 @@ describe('agent connection decisions', () => {
     })).toBe('reject');
   });
 
-  test('a legacy agent can take a free socket but cannot kick a live one', () => {
+  test('an approved agent without a token is rejected', () => {
     expect(agentAuth.decideConnection({
       agentStatus: 'online',
       hasCredential: false,
       tokenValid: false,
       liveSocket: false,
       pendingSocket: false,
-    })).toBe('legacy-accept');
+    })).toBe('reject');
 
     expect(agentAuth.decideConnection({
-      agentStatus: 'online',
+      agentStatus: 'offline',
       hasCredential: false,
       tokenValid: false,
-      liveSocket: true,
+      liveSocket: false,
       pendingSocket: false,
     })).toBe('reject');
+  });
+
+  test('an approved agent without a token cannot submit a message', () => {
+    global.agents = { getAgent: () => ({ name: 'legacy', status: 'online' }) };
+    expect(agentAuth.authorizeMessage('legacy', null)).toEqual({
+      ok: false,
+      reason: 'agent has no connection token',
+    });
+    delete global.agents;
   });
 
   test('a new agent is pending and cannot displace a pending socket', () => {
@@ -75,6 +89,13 @@ describe('agent token seal', () => {
       warn: jest.fn(),
       error: jest.fn(),
     };
+    const db = require('../../db');
+    jest.spyOn(db, 'putData').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    const db = require('../../db');
+    if (db.putData.mockRestore) db.putData.mockRestore();
   });
 
   test('rotation seal opens only with the current token', () => {
@@ -85,17 +106,62 @@ describe('agent token seal', () => {
     expect(() => openSecret(sealed, 'other-token')).toThrow();
   });
 
-  test('issue and rotate keep the old token valid until the new one is presented', () => {
+  test('issue and rotate keep the old token valid until the new one is presented', async () => {
     const name = `agent-${Date.now()}`;
-    const current = agentAuth.issue(name);
+    const current = await agentAuth.issue(name);
     expect(agentAuth.reveal(name).token).toBe(current);
     expect(agentAuth.presentedTokenMatches(name, current)).toBe(true);
 
-    const sealed = agentAuth.beginRotation(name);
+    const sealed = await agentAuth.beginRotation(name);
     const next = openSecret(sealed, current);
     expect(agentAuth.presentedTokenMatches(name, current)).toBe(true);
     expect(agentAuth.presentedTokenMatches(name, next)).toBe(true);
     expect(agentAuth.presentedTokenMatches(name, current)).toBe(false);
-    agentAuth.forget(name);
+    await agentAuth.forget(name);
+  });
+
+  test('a failed token write is rolled back and reported', async () => {
+    const db = require('../../db');
+    const name = `rollback-${Date.now()}`;
+    db.putData.mockRejectedValueOnce(new Error('disk full'));
+    await expect(agentAuth.issue(name)).rejects.toThrow('disk full');
+    expect(agentAuth.hasCredential(name)).toBe(false);
+  });
+
+  test('a credential signs commands for that agent only, on either transport', async () => {
+    const name = `signer-${Date.now()}`;
+    const token = await agentAuth.issue(name);
+    const payload = { name, command: 'ping' };
+    const hubKey = padStringTo256Bits('agent-auth-test-key');
+    const beforeCapability = agentAuth.signCommand(payload, 1);
+    expect(jwt.verify(beforeCapability, hubKey, { algorithms: ['HS256'] })).toMatchObject(payload);
+
+    agentAuth.noteCommandKey(name);
+    const signed = agentAuth.signCommand(payload, 1);
+    const agentKey = padStringTo256Bits(token);
+
+    expect(jwt.verify(signed, agentKey, { algorithms: ['HS256'] })).toMatchObject(payload);
+    expect(() => jwt.verify(signed, hubKey, { algorithms: ['HS256'] })).toThrow();
+
+    const legacy = agentAuth.signCommand({ name: 'legacy-agent', command: 'ping' }, 1);
+    expect(jwt.verify(legacy, hubKey, { algorithms: ['HS256'] })).toMatchObject({ name: 'legacy-agent', command: 'ping' });
+    expect(() => jwt.verify(legacy, agentKey, { algorithms: ['HS256'] })).toThrow();
+    await agentAuth.forget(name);
+  });
+
+  test('rotation keeps signing with the current token until the agent presents the new one', async () => {
+    const name = `rotate-sign-${Date.now()}`;
+    const current = await agentAuth.issue(name);
+    agentAuth.noteCommandKey(name);
+    const next = openSecret(await agentAuth.beginRotation(name), current);
+    const during = agentAuth.signCommand({ name, command: 'ping' }, 1);
+
+    expect(jwt.verify(during, padStringTo256Bits(current), { algorithms: ['HS256'] }).command).toBe('ping');
+    expect(() => jwt.verify(during, padStringTo256Bits(next), { algorithms: ['HS256'] })).toThrow();
+
+    agentAuth.presentedTokenMatches(name, next);
+    const after = agentAuth.signCommand({ name, command: 'ping' }, 1);
+    expect(jwt.verify(after, padStringTo256Bits(next), { algorithms: ['HS256'] }).command).toBe('ping');
+    await agentAuth.forget(name);
   });
 });

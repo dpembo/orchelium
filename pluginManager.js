@@ -5,7 +5,7 @@ const path       = require('path');
 const fs         = require('fs');
 const fsPromises = require('fs').promises;
 const unzipper   = require('unzipper');
-const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 
 const { PLUGINS_DIR } = require('./pluginRegistry');
 
@@ -346,47 +346,49 @@ async function installPlugin(pluginName, registryEntry) {
   logger.debug(`[PLUGIN] Downloaded zip for '${pluginName}' (${zipBuffer.length} bytes), extracting to ${destDir}`);
 
   await fsPromises.mkdir(destDir, { recursive: true });
-
-  await new Promise((resolve, reject) => {
-    Readable.from(zipBuffer)
-      .pipe(unzipper.Parse())
-      .on('entry', entry => {
-        // Strip the root folder (repo name) from the path
-        const parts    = entry.path.split('/');
-        const stripped = parts.slice(1).join('/');
-
-        if (!stripped) { entry.autodrain(); return; }
-
-        const destPath = path.join(destDir, stripped);
-
-        if (!path.resolve(destPath).startsWith(path.resolve(destDir))) {
-          logger.warn(`[PLUGIN] Skipping path traversal attempt in zip: ${entry.path}`);
-          entry.autodrain(); return;
-        }
-
-        if (entry.type === 'Directory') {
-          fsPromises.mkdir(destPath, { recursive: true }).catch(reject);
-          entry.autodrain();
-        } else {
-          fsPromises.mkdir(path.dirname(destPath), { recursive: true })
-            .then(() => {
-              const writer = fs.createWriteStream(destPath);
-              entry.pipe(writer);
-              writer.on('finish', () => {
-                if (destPath.endsWith('.sh')) {
-                  fsPromises.chmod(destPath, 0o755).catch(reject);
-                }
-              });
-              writer.on('error', reject);
-            })
-            .catch(reject);
-        }
-      })
-      .on('finish', resolve)
-      .on('error', reject);
-  });
+  await extractPluginArchive(zipBuffer, destDir);
 
   logger.info(`[PLUGIN] Plugin '${pluginName}' installed successfully`);
+}
+
+/**
+ * Write every archive entry inside destDir, and finish only after the writes
+ * and script permission changes have completed.
+ */
+async function extractPluginArchive(zipBuffer, destDir) {
+  const root = path.resolve(destDir);
+  const directory = await unzipper.Open.buffer(zipBuffer);
+  const writes = [];
+
+  for (const entry of directory.files) {
+    const parts = String(entry.path || '').split('/');
+    const stripped = parts.slice(1).join('/');
+    if (!stripped) continue;
+
+    if (entry.type === 'SymbolicLink' || entry.type === 'Link') {
+      throw new Error(`Plugin archive contains a link: ${entry.path}`);
+    }
+
+    const destPath = path.resolve(root, stripped);
+    if (destPath !== root && !destPath.startsWith(root + path.sep)) {
+      throw new Error(`Plugin archive contains an unsafe path: ${entry.path}`);
+    }
+
+    if (entry.type === 'Directory' || entry.path.endsWith('/')) {
+      writes.push(fsPromises.mkdir(destPath, { recursive: true }));
+      continue;
+    }
+
+    writes.push((async () => {
+      await fsPromises.mkdir(path.dirname(destPath), { recursive: true });
+      await pipeline(entry.stream(), fs.createWriteStream(destPath));
+      if (destPath.endsWith('.sh')) {
+        await fsPromises.chmod(destPath, 0o755);
+      }
+    })());
+  }
+
+  await Promise.all(writes);
 }
 
 // ── Uninstall ─────────────────────────────────────────────────────────────────
@@ -415,4 +417,5 @@ module.exports = {
   fetchRemoteRegistry,
   installPlugin,
   uninstallPlugin,
+  extractPluginArchive,
 };

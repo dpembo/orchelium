@@ -109,6 +109,7 @@ Full documentation: [docs/](./docs/README.MD)
 | Guide | Description |
 |---|---|
 | [Installation](./docs/installation.md) | Deploy the hub and agents |
+| [Agent connection tokens](./docs/agent-connection-token.md) | How an approved agent proves its identity |
 | [Orchestrations](./docs/orchestrations.md) | Build and run workflows |
 | [Plugin Manager](./docs/plugins.md) | Install and manage plugins |
 | [REST API](./docs/REST_API_REFERENCE.md) | Automate via HTTP |

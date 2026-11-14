@@ -275,7 +275,7 @@ async function startMqttConnectionProcess(reset){
       command: "ping"
     }
   
-    var token = passman.createJWTToken(message,1);  
+    var token = require('./agentAuth').signCommand(message, 1);
     publishMessage(command_topic,token);
   }
   

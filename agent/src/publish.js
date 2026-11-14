@@ -15,7 +15,7 @@ function publishStatusUpdate(status, description, data, jobName, callback, isMan
     executionId,
     executionContext,
     agentToken: runtime.AGENT_TOKEN || null,
-    capabilities: [AGENT_CAPABILITIES.TOKEN],
+    capabilities: [AGENT_CAPABILITIES.TOKEN, AGENT_CAPABILITIES.COMMAND_KEY],
   });
 
   runtime.pubCount++;
@@ -76,7 +76,7 @@ function publishLogData(logData, jobName, eta, returnCode, callback, manual, exe
     executionId,
     executionContext,
     agentToken: runtime.AGENT_TOKEN || null,
-    capabilities: [AGENT_CAPABILITIES.TOKEN],
+    capabilities: [AGENT_CAPABILITIES.TOKEN, AGENT_CAPABILITIES.COMMAND_KEY],
   });
 
   runtime.pubCount++;

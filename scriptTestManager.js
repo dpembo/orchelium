@@ -25,6 +25,7 @@ function cloneExecution(record) {
     agentName: record.agentName,
     scriptName: record.scriptName,
     scriptDescription: record.scriptDescription,
+    scriptParameters: record.scriptParameters || '',
     scriptLabel: record.scriptLabel,
     scriptIdentity: record.scriptIdentity,
     sourceType: record.sourceType,
@@ -181,7 +182,7 @@ function getBlockingState(scriptIdentity) {
   return null;
 }
 
-function createTest({ executionId, agentName, scriptName, scriptDescription, scriptSource, sourceType, commandParams, requestedBy }) {
+function createTest({ executionId, agentName, scriptName, scriptDescription, scriptParameters, scriptSource, sourceType, commandParams, requestedBy }) {
   cleanupExpiredTests();
 
   const scriptIdentity = buildScriptIdentity({ scriptName, scriptSource, sourceType });
@@ -207,6 +208,7 @@ function createTest({ executionId, agentName, scriptName, scriptDescription, scr
     agentName,
     scriptName: scriptName || null,
     scriptDescription: scriptDescription || '',
+    scriptParameters: scriptParameters || '',
     scriptLabel,
     scriptIdentity,
     sourceType: sourceType || 'editor',

@@ -15,7 +15,13 @@ var require_protocol = __commonJS({
     var COMMANDS = Object.freeze({
       PING: "ping",
       QUERY_METRIC: "queryMetric",
-      TERMINATE_EXECUTION: "terminateExecution"
+      TERMINATE_EXECUTION: "terminateExecution",
+      ENROLL: "enroll",
+      ROTATE_TOKEN: "rotateToken"
+    });
+    var AGENT_CAPABILITIES = Object.freeze({
+      TOKEN: "agent-token",
+      COMMAND_KEY: "command-key"
     });
     var STATUS = Object.freeze({
       REGISTER: "register",
@@ -73,7 +79,9 @@ var require_protocol = __commonJS({
       jobName,
       executionId = null,
       executionContext = null,
-      reportedAt = /* @__PURE__ */ new Date()
+      reportedAt = /* @__PURE__ */ new Date(),
+      agentToken = null,
+      capabilities = null
     }) {
       const message = {
         name,
@@ -88,6 +96,8 @@ var require_protocol = __commonJS({
         executionId,
         lastStatusReport: reportedAt.toISOString()
       };
+      if (agentToken) message.agentToken = agentToken;
+      if (capabilities && capabilities.length) message.capabilities = capabilities;
       return applyExecutionContext(message, executionContext);
     }
     function buildLogMessage({
@@ -100,7 +110,9 @@ var require_protocol = __commonJS({
       data,
       executionId = null,
       executionContext = null,
-      reportedAt = /* @__PURE__ */ new Date()
+      reportedAt = /* @__PURE__ */ new Date(),
+      agentToken = null,
+      capabilities = null
     }) {
       const message = {
         name,
@@ -114,6 +126,8 @@ var require_protocol = __commonJS({
         executionId,
         lastStatusReport: reportedAt.toISOString()
       };
+      if (agentToken) message.agentToken = agentToken;
+      if (capabilities && capabilities.length) message.capabilities = capabilities;
       return applyExecutionContext(message, executionContext);
     }
     function returnCodeFromExit(code, signal) {
@@ -131,6 +145,7 @@ var require_protocol = __commonJS({
     module2.exports = {
       TOPICS: TOPICS2,
       COMMANDS,
+      AGENT_CAPABILITIES,
       STATUS,
       EXIT_CODES,
       EXECUTION_CONTEXT_FIELDS,
@@ -168,6 +183,9 @@ var require_runtime = __commonJS({
     var workingDirIndex = process.argv.indexOf("--workingDir");
     var mqttServerIndex = process.argv.indexOf("--mqttServer");
     var mqttPortIndex = process.argv.indexOf("--mqttPort");
+    var mqttUsernameIndex = process.argv.indexOf("--mqttUsername");
+    var mqttPasswordIndex = process.argv.indexOf("--mqttPassword");
+    var agentTokenIndex = process.argv.indexOf("--agentToken");
     var wsServerIndex = process.argv.indexOf("--wsServer");
     var wsPortIndex = process.argv.indexOf("--wsPort");
     var retryTimeoutIndex = process.argv.indexOf("--retryTimeout");
@@ -183,6 +201,9 @@ var require_runtime = __commonJS({
       workingDirIndex,
       mqttServerIndex,
       mqttPortIndex,
+      mqttUsernameIndex,
+      mqttPasswordIndex,
+      agentTokenIndex,
       wsServerIndex,
       wsPortIndex,
       retryTimeoutIndex,
@@ -210,6 +231,10 @@ var require_runtime = __commonJS({
       workingDir: workingDirIndex !== -1 ? process.argv[workingDirIndex + 1] : "/tmp",
       MQTT_SERVER: mqttServerIndex !== -1 ? process.argv[mqttServerIndex + 1] : DEFAULT_MQTT_SERVER,
       MQTT_SERVER_PORT: mqttPortIndex !== -1 ? process.argv[mqttPortIndex + 1] : DEFAULT_MQTT_SERVER_PORT,
+      MQTT_USERNAME: mqttUsernameIndex !== -1 ? process.argv[mqttUsernameIndex + 1] : "",
+      MQTT_PASSWORD: mqttPasswordIndex !== -1 ? process.argv[mqttPasswordIndex + 1] : "",
+      AGENT_TOKEN: agentTokenIndex !== -1 ? process.argv[agentTokenIndex + 1] : "",
+      previousAgentToken: "",
       MQTT_ENABLED: process.argv.includes("--mqttServer"),
       WS_SERVER: wsServerIndex !== -1 ? process.argv[wsServerIndex + 1] : DEFAULT_WS_SERVER,
       WS_SERVER_PORT: wsPortIndex !== -1 ? process.argv[wsPortIndex + 1] : DEFAULT_WS_SERVER_PORT,
@@ -247,6 +272,9 @@ var require_constants = __commonJS({
       "--debug": "Enable debug mode for additional logging.",
       "--mqttServer": "Specify the mqtt server address",
       "--mqttPort": "Specify the mqtt server port",
+      "--mqttUsername": "Specify the mqtt username when the broker requires a login",
+      "--mqttPassword": "Specify the mqtt password when the broker requires a login",
+      "--agentToken": "Connection token issued when this agent is approved",
       "--wsServer": "Specify the WebSocket server address",
       "--wsPort": "Specify the WebSocket server port",
       "--retryCount": "Number of connection retries",
@@ -399,6 +427,15 @@ var require_settings = __commonJS({
               case "MQTT_PORT":
                 if (runtime2.mqttPortIndex === -1) runtime2.MQTT_SERVER_PORT = value;
                 break;
+              case "MQTT_USERNAME":
+                if (runtime2.mqttUsernameIndex === -1) runtime2.MQTT_USERNAME = value;
+                break;
+              case "MQTT_PASSWORD":
+                if (runtime2.mqttPasswordIndex === -1) runtime2.MQTT_PASSWORD = value;
+                break;
+              case "AGENT_TOKEN":
+                if (runtime2.agentTokenIndex === -1) runtime2.AGENT_TOKEN = value;
+                break;
               case "MQTT_ENABLED":
                 if (!process.argv.includes("--mqttServer")) runtime2.MQTT_ENABLED = value.toUpperCase() === "TRUE";
                 break;
@@ -438,7 +475,28 @@ var require_settings = __commonJS({
         debug2(DEBUG_LEVEL2.TRACE, err);
       }
     }
-    module2.exports = { parseSettingsFile: parseSettingsFile2 };
+    function writeSetting(key, value) {
+      const filePath = "settings.sh";
+      const safeValue = String(value).replace(/"/g, "");
+      let data = "";
+      try {
+        data = fs.readFileSync(filePath, "utf8");
+      } catch (err) {
+        data = "";
+      }
+      const line = `${key}="${safeValue}"`;
+      const pattern = new RegExp(`^${key}=".*"$`, "m");
+      if (pattern.test(data)) {
+        data = data.replace(pattern, line);
+      } else {
+        data = `${data.replace(/\s*$/, "")}
+${line}
+`;
+      }
+      fs.writeFileSync(filePath, data, { encoding: "utf8", mode: 384 });
+      if (key === "AGENT_TOKEN") runtime2.AGENT_TOKEN = safeValue;
+    }
+    module2.exports = { parseSettingsFile: parseSettingsFile2, writeSetting };
   }
 });
 
@@ -497,6 +555,7 @@ ${colors.brightYellow}  \u{1F50C} Connection Settings${colors.reset}`);
         console.log(`${colors.brightYellow}    \u{1F539} Mode:${colors.reset}                ${colors.yellow}MQTT${colors.reset}`);
         console.log(`${colors.brightYellow}    \u{1F539} Server:${colors.reset}              ${colors.yellow}${runtime2.MQTT_SERVER}${colors.reset}`);
         console.log(`${colors.brightYellow}    \u{1F539} Port:${colors.reset}                ${colors.yellow}${runtime2.MQTT_SERVER_PORT}${colors.reset}`);
+        console.log(`${colors.brightYellow}    \u{1F539} Username:${colors.reset}            ${colors.yellow}${runtime2.MQTT_USERNAME ? runtime2.MQTT_USERNAME : "none"}${colors.reset}`);
       } else {
         console.log(`${colors.brightYellow}    \u{1F539} Mode:${colors.reset}                ${colors.yellow}WebSocket${colors.reset}`);
         console.log(`${colors.brightYellow}    \u{1F539} Server:${colors.reset}              ${colors.yellow}${runtime2.WS_SERVER}${colors.reset}`);
@@ -504,6 +563,7 @@ ${colors.brightYellow}  \u{1F50C} Connection Settings${colors.reset}`);
       }
       console.log(`${colors.brightYellow}    \u{1F539} Webserver Port:${colors.reset}      ${colors.yellow}${runtime2.PORT}${colors.reset}`);
       console.log(`${colors.brightYellow}    \u{1F539} Connection Timeout:${colors.reset}  ${colors.yellow}${runtime2.RETRY_TIMEOUT / 1e3} secs${colors.reset}`);
+      console.log(`${colors.brightYellow}    \u{1F539} Connection token:${colors.reset}    ${colors.yellow}${runtime2.AGENT_TOKEN ? "configured" : "not set"}${colors.reset}`);
       console.log(`
 ${colors.brightYellow}  \u{1F30D} Environment${colors.reset}`);
       console.log(`${divider}`);
@@ -522,11 +582,44 @@ var require_auth = __commonJS({
   "src/auth.js"(exports2, module2) {
     var jwt = require("jsonwebtoken");
     var runtime2 = require_runtime();
+    var { padStringTo256Bits } = require_keyMaterial();
+    function commandVerificationKeys() {
+      if (runtime2.AGENT_TOKEN) {
+        const keys = [padStringTo256Bits(String(runtime2.AGENT_TOKEN))];
+        if (runtime2.previousAgentToken) keys.push(padStringTo256Bits(String(runtime2.previousAgentToken)));
+        return keys;
+      }
+      return runtime2.enckey ? [runtime2.enckey] : [];
+    }
     function validateJWTToken(inToken) {
       return new Promise((resolve, reject) => {
-        jwt.verify(JSON.parse(inToken), runtime2.enckey, { algorithm: "HS256" }, (err, decoded) => {
-          err ? reject(err) : resolve(decoded);
-        });
+        const keys = commandVerificationKeys();
+        if (keys.length === 0) {
+          reject(new Error("No command key"));
+          return;
+        }
+        let parsed;
+        try {
+          parsed = JSON.parse(inToken);
+        } catch (err) {
+          reject(err);
+          return;
+        }
+        const tryKey = (index) => {
+          jwt.verify(parsed, keys[index], { algorithms: ["HS256"] }, (err, decoded) => {
+            if (err) {
+              if (index + 1 < keys.length) {
+                tryKey(index + 1);
+                return;
+              }
+              reject(err);
+              return;
+            }
+            if (index === 0) runtime2.previousAgentToken = "";
+            resolve(decoded);
+          });
+        };
+        tryKey(0);
       });
     }
     module2.exports = { validateJWTToken };
@@ -536,7 +629,7 @@ var require_auth = __commonJS({
 // src/publish.js
 var require_publish = __commonJS({
   "src/publish.js"(exports2, module2) {
-    var { TOPICS: TOPICS2, buildStatusMessage, buildLogMessage } = require_protocol();
+    var { TOPICS: TOPICS2, AGENT_CAPABILITIES, buildStatusMessage, buildLogMessage } = require_protocol();
     var runtime2 = require_runtime();
     var { debug: debug2, DEBUG_LEVEL: DEBUG_LEVEL2 } = require_log();
     function publishStatusUpdate2(status, description, data, jobName, callback, isManual, executionId = null, retryCount = 0, executionContext = null) {
@@ -550,7 +643,9 @@ var require_publish = __commonJS({
         status,
         jobName,
         executionId,
-        executionContext
+        executionContext,
+        agentToken: runtime2.AGENT_TOKEN || null,
+        capabilities: [AGENT_CAPABILITIES.TOKEN, AGENT_CAPABILITIES.COMMAND_KEY]
       });
       runtime2.pubCount++;
       const maxRetries = 6;
@@ -606,7 +701,9 @@ var require_publish = __commonJS({
         returnCode,
         data: logData,
         executionId,
-        executionContext
+        executionContext,
+        agentToken: runtime2.AGENT_TOKEN || null,
+        capabilities: [AGENT_CAPABILITIES.TOKEN, AGENT_CAPABILITIES.COMMAND_KEY]
       });
       runtime2.pubCount++;
       if (runtime2.useMQTT) {
@@ -759,9 +856,12 @@ var require_executor = __commonJS({
       publishLogData("", jobName, eta, completionReturnCode, void 0, manual, executionId, executionContext);
       debug2(DEBUG_LEVEL2.INFO, `Job completed in ${eta} seconds`);
     }
+    function sanitizeCommandParams(commandParams) {
+      return String(commandParams || "").replace(/[\r\n]+/g, " ").replace(/[;&|`$()\\\"'<>]/g, "\\$&");
+    }
     function executeBackupCommand(command, commandParams, jobName, callback, manual, executionId = null, triggerContext = null, contextEnvVars = {}, executionContext = null) {
       runtime2.jobCount++;
-      const sanitizedParams = String(commandParams || "").replace(/[;&|`$()\\\"'<>]/g, "\\$&");
+      const sanitizedParams = sanitizeCommandParams(commandParams);
       const activeJobKey = getActiveJobKey(executionId, jobName);
       runtime2.activeJobs.set(activeJobKey, {
         startTime: Date.now(),
@@ -886,7 +986,8 @@ var require_executor = __commonJS({
       executeBackupCommand,
       backupComplete,
       terminateExecution,
-      cleanupBackgroundTasks: cleanupBackgroundTasks2
+      cleanupBackgroundTasks: cleanupBackgroundTasks2,
+      sanitizeCommandParams
     };
   }
 });
@@ -1047,6 +1148,36 @@ var require_liveness = __commonJS({
   }
 });
 
+// ../shared/secretBox.js
+var require_secretBox = __commonJS({
+  "../shared/secretBox.js"(exports2, module2) {
+    var crypto = require("crypto");
+    var { padStringTo256Bits } = require_keyMaterial();
+    function sealSecret(plaintext, secret) {
+      const key = padStringTo256Bits(String(secret));
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+      const encrypted = Buffer.concat([cipher.update(String(plaintext), "utf8"), cipher.final()]);
+      const tag = cipher.getAuthTag();
+      return Buffer.concat([iv, tag, encrypted]).toString("base64");
+    }
+    function openSecret(sealed, secret) {
+      const buf = Buffer.from(String(sealed), "base64");
+      if (buf.length < 28) {
+        throw new Error("Invalid sealed secret");
+      }
+      const iv = buf.subarray(0, 12);
+      const tag = buf.subarray(12, 28);
+      const encrypted = buf.subarray(28);
+      const key = padStringTo256Bits(String(secret));
+      const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+      decipher.setAuthTag(tag);
+      return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString("utf8");
+    }
+    module2.exports = { sealSecret, openSecret };
+  }
+});
+
 // src/commands.js
 var require_commands = __commonJS({
   "src/commands.js"(exports2, module2) {
@@ -1058,6 +1189,8 @@ var require_commands = __commonJS({
     var { executeBackupCommand, backupComplete, terminateExecution } = require_executor();
     var { computeMetric } = require_metrics();
     var { livenessProbe } = require_liveness();
+    var { writeSetting } = require_settings();
+    var { openSecret } = require_secretBox();
     async function handleCommand2(message) {
       debug2(DEBUG_LEVEL2.TRACE, "Received Command from Orchelium Server");
       runtime2.subCount++;
@@ -1073,10 +1206,42 @@ var require_commands = __commonJS({
           contextEnvVars = {}
         } = decodedPayload;
         debug2(DEBUG_LEVEL2.TRACE, `Job: [${jobName}] for agent: [${agentId}] with executionId: [${executionId}]`);
-        debug2(DEBUG_LEVEL2.TRACE, `Command: ${command}, Manual: ${manual}, Params: ${commandParams}`);
+        debug2(DEBUG_LEVEL2.TRACE, `Command: ${command}, Manual: ${manual}`);
         debug2(DEBUG_LEVEL2.TRACE, `Context Env Vars: ${JSON.stringify(contextEnvVars)}`);
         if (agentId !== runtime2.AGENT_ID) return;
         const executionContext = executionContextFromPayload(decodedPayload);
+        if (command === COMMANDS.ENROLL) {
+          if (!commandParams) {
+            debug2(DEBUG_LEVEL2.ERROR, "Enrollment command did not include a token");
+            return;
+          }
+          writeSetting("AGENT_TOKEN", commandParams);
+          debug2(DEBUG_LEVEL2.INFO, "Stored connection token");
+          if (runtime2.wsClient && runtime2.wsClient.reconnectNow) {
+            runtime2.wsClient.reconnectNow().catch((err) => {
+              debug2(DEBUG_LEVEL2.WARN, `Reconnect after enrollment failed: ${err.message}`);
+            });
+          }
+          return;
+        }
+        if (command === COMMANDS.ROTATE_TOKEN) {
+          if (!runtime2.AGENT_TOKEN) {
+            debug2(DEBUG_LEVEL2.ERROR, "Cannot rotate a connection token before one is stored");
+            return;
+          }
+          let nextToken;
+          try {
+            nextToken = openSecret(commandParams, runtime2.AGENT_TOKEN);
+          } catch (err) {
+            debug2(DEBUG_LEVEL2.ERROR, `Could not open rotated connection token: ${err.message}`);
+            return;
+          }
+          runtime2.previousAgentToken = runtime2.AGENT_TOKEN;
+          writeSetting("AGENT_TOKEN", nextToken);
+          debug2(DEBUG_LEVEL2.INFO, "Stored rotated connection token");
+          publishStatusUpdate2("token_ack", "Connection token updated");
+          return;
+        }
         if (command === COMMANDS.PING) {
           const statusJsonStr = await livenessProbe();
           publishStatusUpdate2("pong", "ping response", statusJsonStr);
@@ -1193,6 +1358,8 @@ var require_mqtt = __commonJS({
         this.isReconnecting = false;
         this.isConnecting = false;
         this.connectionTimeout = options.connectionTimeout || 5e3;
+        this.username = options.username || "";
+        this.password = options.password || "";
         this.connectionTimeoutHandler = null;
         this.retryManager = new RetryBackoffManager(this.server, "MQTT");
       }
@@ -1210,7 +1377,12 @@ var require_mqtt = __commonJS({
         this.isConnecting = true;
         return new Promise((resolve, reject) => {
           const connectUrl = `mqtt://${this.server}:${this.port}`;
-          this.client = mqtt.connect(connectUrl);
+          const clientOptions = {};
+          if (this.username) {
+            clientOptions.username = this.username;
+            clientOptions.password = this.password;
+          }
+          this.client = Object.keys(clientOptions).length ? mqtt.connect(connectUrl, clientOptions) : mqtt.connect(connectUrl);
           this.connectionTimeoutHandler = setTimeout(() => {
             if (!this.isConnected) {
               this.client.end();
@@ -1300,7 +1472,11 @@ var require_websocket = __commonJS({
     var runtime2 = require_runtime();
     var { debug: debug2, DEBUG_LEVEL: DEBUG_LEVEL2 } = require_log();
     function SafeWebSocket(url, protocols) {
-      const socket = protocols === void 0 ? new websocket(url) : new websocket(url, protocols);
+      const options = {};
+      if (runtime2.AGENT_TOKEN) {
+        options.headers = { Authorization: `Bearer ${runtime2.AGENT_TOKEN}` };
+      }
+      const socket = protocols === void 0 ? new websocket(url, options) : new websocket(url, protocols, options);
       socket.on("error", (err) => {
         debug2(DEBUG_LEVEL2.TRACE, `WebSocket socket error: ${err && err.message ? err.message : err}`);
       });
@@ -1390,7 +1566,7 @@ var require_websocket = __commonJS({
             if (generation !== this.connectionGeneration) return;
             this.lastActivityTime = Date.now();
             const message = `"${event.data}"`;
-            debug2(DEBUG_LEVEL2.TRACE, `Received message on [${connId}]: ${message}`);
+            debug2(DEBUG_LEVEL2.TRACE, `Received message on [${connId}]`);
             this.processMessageCallback(message);
           });
           setTimeout(() => {
@@ -1455,6 +1631,21 @@ var require_websocket = __commonJS({
           }).catch(() => {
           });
         }, retryDelay);
+      }
+      reconnectNow() {
+        this.connectionGeneration += 1;
+        const old = this.client;
+        this.isConnected = false;
+        this.isConnecting = false;
+        this.isReconnecting = false;
+        this.client = null;
+        if (old) {
+          try {
+            old.close();
+          } catch (e) {
+          }
+        }
+        return this.connect();
       }
       sendMessage(message) {
         if (this.isConnected && this.client && this.client.readyState === 1) {
@@ -1681,7 +1872,9 @@ if (process.argv.includes("--debug")) {
 }
 if (runtime.useMQTT) {
   runtime.mqttClient = new MqttHandler(runtime.MQTT_SERVER, runtime.MQTT_SERVER_PORT, {
-    connectionTimeout: runtime.RETRY_TIMEOUT
+    connectionTimeout: runtime.RETRY_TIMEOUT,
+    username: runtime.MQTT_USERNAME,
+    password: runtime.MQTT_PASSWORD
   });
   runtime.mqttClient.connect().then(() => {
     runtime.mqttClient.subscribe(TOPICS.command, handleCommand);

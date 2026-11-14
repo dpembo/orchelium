@@ -61,10 +61,16 @@ function backupComplete(jobName, eta, manual, executionId = null, executionConte
   debug(DEBUG_LEVEL.INFO, `Job completed in ${eta} seconds`);
 }
 
+function sanitizeCommandParams(commandParams) {
+  return String(commandParams || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[;&|`$()\\\"'<>]/g, '\\$&');
+}
+
 function executeBackupCommand(command, commandParams, jobName, callback, manual, executionId = null, triggerContext = null, contextEnvVars = {}, executionContext = null) {
   runtime.jobCount++;
 
-  const sanitizedParams = String(commandParams || '').replace(/[;&|`$()\\\"'<>]/g, '\\$&');
+  const sanitizedParams = sanitizeCommandParams(commandParams);
   const activeJobKey = getActiveJobKey(executionId, jobName);
 
   runtime.activeJobs.set(activeJobKey, {
@@ -209,4 +215,5 @@ module.exports = {
   backupComplete,
   terminateExecution,
   cleanupBackgroundTasks,
+  sanitizeCommandParams,
 };

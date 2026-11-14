@@ -252,6 +252,19 @@ function noValue(inValue){
         .tab { min-width: 100px; }
         .tabs .tab a { padding: 0 12px; font-size: 12px; }
       </style>
+      <script>
+        function clearStoredSecret(input) {
+          if (input.getAttribute('data-secret-mask') === '1' && input.value === <%- JSON.stringify(storedSecretMask) %>) {
+            input.value = '';
+          }
+        }
+        function restoreStoredSecret(input) {
+          if (input.getAttribute('data-secret-mask') === '1' && input.value === '') {
+            input.value = <%- JSON.stringify(storedSecretMask) %>;
+          }
+          if (window.M && M.updateTextFields) M.updateTextFields();
+        }
+      </script>
   </head>
 
   <body>
@@ -259,6 +272,50 @@ function noValue(inValue){
 
       <div class="container">
         <h5 class="header orange-text">Settings</h5>
+
+        <% if (encryptionKeyFromEnv) { %>
+        <div class="card-panel amber lighten-4">
+          The encryption key is set by <code>ORCHELIUM_ENCRYPTION_KEY</code>. A restart uses that value instead of <code>data/encryption-key</code>. Unset the variable before changing the key here.
+        </div>
+        <% } else { %>
+        <div class="card">
+          <div class="card-content">
+            <span class="card-title">Encryption key</span>
+            <% if (encryptionKeyIsDefault) { %>
+            <p class="red-text">Stored secrets are still encrypted with the default key <strong>CHANGEIT</strong>. Change it before you keep this hub running.</p>
+            <% } else { %>
+            <p>Stored SMTP passwords, MQTT passwords, and agent token copies are encrypted with the key in <code>data/encryption-key</code>.</p>
+            <% } %>
+            <% if (shownEncryptionKey) { %>
+            <p>Copy this key now. It will not be shown again. An agent that still verifies enrollment with the hub key needs this same value.</p>
+            <div class="input-field">
+              <input id="shownEncryptionKey" type="text" readonly value="<%= shownEncryptionKey %>">
+              <label for="shownEncryptionKey" class="active">New encryption key</label>
+            </div>
+            <% } %>
+            <form action="/settings/encryption-key" method="POST" autocomplete="off">
+              <input type="hidden" name="_csrf" value="<%= csrf %>">
+              <div class="input-field">
+                <input id="newEncryptionKey" name="newEncryptionKey" type="text" autocomplete="off">
+                <label for="newEncryptionKey">New key</label>
+              </div>
+              <p class="grey-text">Leave this empty to generate a random key. Agents that still use the hub key for enrollment must be updated to the new value. Agents that already verify commands with their connection token do not.</p>
+              <button type="button" class="btn-flat" onclick="generateEncryptionKey()">Generate</button>
+              <button type="submit" class="btn orange">Change encryption key</button>
+            </form>
+          </div>
+        </div>
+        <script>
+          function generateEncryptionKey() {
+            var bytes = new Uint8Array(32);
+            crypto.getRandomValues(bytes);
+            var hex = Array.from(bytes).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+            var field = document.getElementById('newEncryptionKey');
+            field.value = hex;
+            if (window.M && M.updateTextFields) M.updateTextFields();
+          }
+        </script>
+        <% } %>
 
         <div class="row">
           <form class="col s12" action="settings.html" method="POST">
@@ -405,7 +462,7 @@ function noValue(inValue){
                     <label for="mqttUsername">MQTT Username</label>
                   </div>
                   <div class="input-field col s6">
-                    <input id="mqttPassword" type="password" name="mqttPassword" value="<%=serverConfig.mqtt.password%>">
+                    <input id="mqttPassword" type="password" name="mqttPassword" value="<%= serverConfig.mqtt.password ? storedSecretMask : '' %>" autocomplete="off" data-secret-mask="<%= serverConfig.mqtt.password ? '1' : '' %>" onfocus="clearStoredSecret(this)" onblur="restoreStoredSecret(this)">
                     <label for="mqttPassword">MQTT Password</label>
                   </div>
                   </div>
@@ -525,7 +582,7 @@ function noValue(inValue){
                   <label for="smtpUsername">SMTP Username</label>
                 </div>
                 <div class="input-field col s6">
-                  <input id="smtpPassword" type="password" name="smtpPassword" value="<%=serverConfig.smtp.password%>">
+                  <input id="smtpPassword" type="password" name="smtpPassword" value="<%= serverConfig.smtp.password ? storedSecretMask : '' %>" autocomplete="off" data-secret-mask="<%= serverConfig.smtp.password ? '1' : '' %>" onfocus="clearStoredSecret(this)" onblur="restoreStoredSecret(this)">
                   <label for="smtpPassword">SMTP Password</label>
                 </div>
                 </div>

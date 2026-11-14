@@ -81,7 +81,16 @@ function displaySecs(secs) {
   
   <script>
   var editor;
-  var overviewText=`#start-params
+  var scriptDocs = <%- JSON.stringify((scripts || []).reduce(function(map, item) {
+    if (item && item.data && item.data.filename) {
+      map[item.data.filename] = {
+        description: item.data.metaDescription || '',
+        parameters: item.data.metaParameters || ''
+      };
+    }
+    return map;
+  }, {})).replace(/</g, '\\u003c') %>;
+  var overviewText = `#start-params
 #<b>SAMPLE DESCRIPTION</b>
 #<br/><br/><b>Parameters</b><br/>
 #<b>#1</b> - Param1<br/>
@@ -89,6 +98,7 @@ function displaySecs(secs) {
 #end-params`;
 
 var onScript = "";
+var scriptEditorCsrf = <%- JSON.stringify(csrf || '') %>;
 var lastSavedScriptContent = "";
 var suppressUnsavedScriptWarning = false;
 
@@ -169,6 +179,30 @@ function deSelectAllFiles(){
 
 
 
+function documentedParameterHtml(parameters) {
+  var params = String(parameters || '').trim();
+  if (!params) return '';
+  if (params.toLowerCase().indexOf('<br') === 0) {
+    var pos = params.indexOf('>');
+    if (pos !== -1) params = params.substring(pos + 1).trim();
+  }
+  return params;
+}
+
+function showDocumentedParameters(parameters) {
+  var box = document.getElementById('scriptInfoDetail');
+  if (box) box.innerHTML = documentedParameterHtml(parameters);
+}
+
+function parametersForScript(scriptName, scriptContent) {
+  var parsed = scriptContent ? extractScriptMetadata(scriptContent) : null;
+  if (parsed && parsed.data && parsed.data.metaDescription) {
+    return parsed.data.metaParameters || '';
+  }
+  var known = scriptName && scriptDocs[scriptName];
+  return known ? known.parameters : '';
+}
+
 function scriptSelected(element,inScript,inDescription){
   //alert("inscript [" + inScript + "]");
   onScript = inScript;
@@ -181,37 +215,27 @@ function scriptSelected(element,inScript,inDescription){
     editor.setValue("#/bin/sh\n" + overviewText + "\n\n#Implement your shell script here");
     //var desc = extractHTMLParams(data);
     window.scrollTo(0, 0);
-    document.getElementById('scriptInfoDetail').innerHTML="";
+    showDocumentedParameters('');
     markScriptSavedState();
     return;
   }
   else{
-    var url = "/rest/script/" + inScript + "?mode=raw"; 
+    var known = scriptDocs[inScript];
+    if (known) showDocumentedParameters(known.parameters);
+    var url = "/rest/script/" + encodeURIComponent(inScript) + "?mode=raw"; 
     fetchApiData(url)
     .then(data => {
-      // Handle the API data as a string here
-      //console.log(data);
-      //alert(data);
-      editor.setValue(data);
-      //var desc = extractHTMLParams(data);
-      var metaData = extractScriptMetadata(data);
-      //document.getElementById('scriptParameters').innerHTML=metaData.data.metaParameters.replace(/\n/g,"<br/>");
-      window.scrollTo(0, 0);
-      var params=metaData.data.metaParameters;
-      if(params.toLowerCase().indexOf("<br")==0){
-        var pos = params.indexOf('>');
-        params = params.substring(pos+1);
+      if (typeof data !== 'string') {
+        throw new Error('Script content was not returned');
       }
-      document.getElementById('scriptInfoDetail').innerHTML=params;
-      //alert(element.innerHTML);
-      element.style.backgroundColor="rgba(0,0,0,0.2)";
+      editor.setValue(data);
+      window.scrollTo(0, 0);
+      showDocumentedParameters(parametersForScript(inScript, data));
+      if (element) element.style.backgroundColor="rgba(0,0,0,0.2)";
       markScriptSavedState();
-      //element.style.color="red";
     })
     .catch(error => {
-      // Handle errors here or display them to the user
       console.error('Error:', error);
-      document.getElementById('scriptInfoDetail').innerHTML="";
     });
   }
 
@@ -235,26 +259,23 @@ function scriptSelected(element,inScript,inDescription){
       window.scrollTo(0, 0);
       return;
     }
-    var url = "/rest/script/" + select.value + "?mode=raw";
+    var url = "/rest/script/" + encodeURIComponent(select.value) + "?mode=raw";
     if(select.value=="")
     {
-      document.getElementById('scriptInfoDetail').innerHTML="";
+      showDocumentedParameters('');
       return;
     }
     fetchApiData(url)
     .then(data => {
-      // Handle the API data as a string here
-      //console.log(data);
-      //alert(data);
+      if (typeof data !== 'string') {
+        throw new Error('Script content was not returned');
+      }
       editor.setValue(data);
-      var desc = extractHTMLParams(data);
       window.scrollTo(0, 0);
-      document.getElementById('scriptInfoDetail').innerHTML=desc;
+      showDocumentedParameters(parametersForScript(select.value, data));
     })
     .catch(error => {
-      // Handle errors here or scriptInfoDetaildisplay them to the user
       console.error('Error:', error);
-      document.getElementById('scriptInfoDetail').innerHTML="";
     });
   }
 
@@ -436,13 +457,9 @@ function scriptSelected(element,inScript,inDescription){
                   // You can perform further actions with the script content here
                   //var desc = extractHTMLParams(scriptContent);
                   //window.scrollTo(0, 0);
-                  var params=extractScriptMetadata(editor.getValue()).data.metaParameters;
-                  if(params.toLowerCase().indexOf("<br")==0){
-                    var pos = params.indexOf('>');
-                    params = params.substring(pos+1);
-                  }
-                  document.getElementById('scriptInfoDetail').innerHTML=params;
-                  document.getElementById('orch-desc-text').innerText=extractScriptMetadata(editor.getValue()).data.metaDescription;
+                  var scriptMeta = extractScriptMetadata(editor.getValue());
+                  showDocumentedParameters(parametersForScript(onScript, editor.getValue()));
+                  document.getElementById('orch-desc-text').innerText = scriptMeta && scriptMeta.data ? scriptMeta.data.metaDescription : '';
               });
 
               <% if(scriptToEdit!=null){%>
@@ -543,8 +560,15 @@ function scriptSelected(element,inScript,inDescription){
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/saveScript');
             xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('X-CSRF-Token', scriptEditorCsrf);
             xhr.onload = function() {
-              if (xhr.status === 200) {
+              var payload = null;
+              try {
+                payload = JSON.parse(xhr.responseText);
+              } catch (e) {
+                payload = null;
+              }
+              if (xhr.status === 200 && payload && payload.status === 'success') {
                 console.log(xhr.responseText);
                 markScriptSavedState();
                 //M.toast({html: "Script Saved", displayLength: 5000});
@@ -653,11 +677,12 @@ function scriptSelected(element,inScript,inDescription){
             }
 
             const scriptMetadata = extractScriptMetadata(editor.getValue()).data || {};
+            const knownScript = onScript && scriptDocs[onScript] ? scriptDocs[onScript] : null;
 
             window.BackupHubScriptTest.open({
               scriptName: onScript || null,
-              scriptDescription: scriptMetadata.metaDescription || '',
-              scriptParameters: scriptMetadata.metaParameters || '',
+              scriptDescription: scriptMetadata.metaDescription || (knownScript ? knownScript.description : ''),
+              scriptParameters: scriptMetadata.metaParameters || (knownScript ? knownScript.parameters : ''),
               sourceType: 'editor',
               scriptContent: editor.getValue(),
               commandParams: '',

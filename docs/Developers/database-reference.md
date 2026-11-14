@@ -17,6 +17,12 @@ This document describes all persistent databases used in Orchelium, their struct
 - `ORCHESTRATION_JOBS` (Object: jobId → orchestration job definition)
 - `NOTIFICATIONS_DATA` (Array of notification objects)
 - `JOB_HISTORY` (Array of job history items)
+- `AGENTS_CONFIG` (Object: agent name → agent record)
+- `AGENT_CREDENTIALS` (Object: agent name → connection-token hash and encrypted token). See [Agent connection tokens](../agent-connection-token.md). The plain token is not stored in this record.
+
+The Express session signing secret is not a database key. It is the file `data/session-secret`, created on first startup when the file is missing.
+
+The hub encryption key for SMTP, MQTT, and stored agent tokens is the file `data/encryption-key`. On first startup, when that file is missing: use `ORCHELIUM_ENCRYPTION_KEY` if set; otherwise write `CHANGEIT` when encrypted secrets already exist and recommend a change in the notification list; otherwise write a random key.
 
 ### Example: Accessing Data
 ```js

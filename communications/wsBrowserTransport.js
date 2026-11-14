@@ -38,11 +38,11 @@ function init(server) {
             logger.debug(`[wsBrowserTransport] Client left room [${data.room}]`);
         });
 
-        socket.on('delete', (data) => {
+        socket.on('delete', async (data) => {
             logger.debug('[wsBrowserTransport] A delete request over websocket was requested for [' + data + ']');
             agents.deleteAgent(data);
             try {
-                require('./agentAuth').forget(data);
+                await require('./agentAuth').forget(data);
             } catch (err) {
                 logger.warn(`Failed to remove credentials for [${data}]: ${err.message}`);
             }

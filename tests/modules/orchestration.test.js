@@ -272,6 +272,18 @@ describe('Orchestration Module', () => {
       expect(logger.info).toHaveBeenCalledWith('Saving orchestration job [new-job]');
     });
 
+    it('should reject an execute script path outside scripts/', async () => {
+      db.getData.mockResolvedValue({});
+      const jobDef = {
+        name: 'Bad Job',
+        nodes: [{ id: 'node1', type: 'execute', data: { script: '../data/server-config.json' } }],
+        edges: [],
+      };
+
+      await expect(orchestration.saveJob('bad-job', jobDef)).rejects.toThrow('outside the scripts directory');
+      expect(db.putData).not.toHaveBeenCalled();
+    });
+
     it('should create new version when job definition changes', async () => {
       const mockJobs = {
         job1: {

@@ -5,6 +5,7 @@ Welcome to the Orchelium developer documentation! This section contains all guid
 ## Contents
 
 - [Developer Guide](developer-guide.md): Project structure, extension points, and contributing
+- [Codebase review](codebase-review.md): Prioritised quality, security, performance, and architecture findings
 - **Plugin Development**
 	- [Plugin Developer Guide](Engine_Updates/PLUGIN_DEVELOPER_GUIDE.md): Building a plugin from scratch, script patterns, output, hot-reload
 	- [Plugin Specification](Engine_Updates/PLUGIN_SPEC.md): Full plugin.yaml schema reference

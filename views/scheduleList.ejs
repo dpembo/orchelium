@@ -143,11 +143,27 @@ if (Array.isArray(schedules)) {
     messageServer("ping",agentName);
   }
   
+  function postJobAction(url, fields) {
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = url;
+    function add(name, value) {
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value == null ? '' : value;
+      form.appendChild(input);
+    }
+    add('_csrf', <%- JSON.stringify(csrf || '') %>);
+    Object.keys(fields || {}).forEach(function (key) { add(key, fields[key]); });
+    document.body.appendChild(form);
+    form.submit();
+  }
+
   function doDelete()
   {
     var jobName = document.getElementById('inJobName').innerHTML;
-    //alert(jobName)
-    document.location.replace("/delete-schedule.html?jobName=" + jobName);
+    postJobAction('/delete-schedule.html', { jobName: jobName });
   }
 
   function doNotify(status,msg)
@@ -162,7 +178,7 @@ if (Array.isArray(schedules)) {
   }
 
   function runClassicSchedule(scheduleIndex) {
-    document.location.href = "/runSchedule.html?index=" + scheduleIndex;
+    postJobAction('/runSchedule.html', { index: scheduleIndex });
   }
 
   function toggleScheduleEnabled(checkbox) {

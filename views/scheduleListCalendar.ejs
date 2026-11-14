@@ -224,10 +224,15 @@ function datesMatch(d1,d2){
           var elem = document.getElementById('modalContent');
           //alert(icon);
           //set the indx of the edit
-          document.getElementById('editBtn').href="/scheduler.html?index=" + index + "&redir=" + document.location.href;
-          document.getElementById('cloneBtn').href="/scheduler.html?copyIndex=" + index + "&redir=" + document.location.href;
-          document.getElementById('statusBtn').href="scheduleInfo.html?index=" + index + "&redir=" + document.location.href;
-          document.getElementById('runBtn').href="runSchedule.html?index=" + index;
+          const returnTo = window.location.pathname + window.location.search;
+          document.getElementById('editBtn').href = "/scheduler.html?index=" + index + "&redir=" + encodeURIComponent(returnTo);
+          document.getElementById('cloneBtn').href = "/scheduler.html?copyIndex=" + index + "&redir=" + encodeURIComponent(returnTo);
+          document.getElementById('statusBtn').href = "scheduleInfo.html?index=" + index + "&redir=" + encodeURIComponent(returnTo);
+          document.getElementById('runBtn').href = '#';
+          document.getElementById('runBtn').onclick = function (event) {
+            event.preventDefault();
+            postJobAction('/runSchedule.html', { index: index });
+          };
           document.getElementById('deleteBtn').onclick = function() { openDeleteModal(name); };
           //alert(colour);
           html = '<h4>';
@@ -320,6 +325,23 @@ function datesMatch(d1,d2){
 
         }
 
+        function postJobAction(url, fields) {
+          var form = document.createElement('form');
+          form.method = 'POST';
+          form.action = url;
+          function add(name, value) {
+            var input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = name;
+            input.value = value == null ? '' : value;
+            form.appendChild(input);
+          }
+          add('_csrf', <%- JSON.stringify(csrf || '') %>);
+          Object.keys(fields || {}).forEach(function (key) { add(key, fields[key]); });
+          document.body.appendChild(form);
+          form.submit();
+        }
+
         function openDeleteModal(jobName) {
           document.getElementById('inJobName').innerHTML = jobName;
           var elem = document.getElementById('confirmationModal');
@@ -329,7 +351,10 @@ function datesMatch(d1,d2){
 
         function doDelete() {
           var jobName = document.getElementById('inJobName').innerHTML;
-          document.location.replace("/delete-schedule.html?jobName=" + jobName + "&redir=" + encodeURIComponent(document.location.href));
+          postJobAction('/delete-schedule.html', {
+            jobName: jobName,
+            redir: window.location.pathname + window.location.search
+          });
         }
 
       </script>

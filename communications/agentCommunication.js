@@ -1,6 +1,7 @@
 const { initServerConfig } = require("../configuration");
 const { publishMessage } = require("./mqttTransport");
 const { TOPICS, applyExecutionContext } = require("../shared/protocol");
+const agentAuth = require("./agentAuth");
 
 const command_topic = TOPICS.command;
 
@@ -43,7 +44,7 @@ function sendCommand(agent_id, topic, command, commandParams, jobName, commsType
         applyExecutionContext(message, executionMetadata);
     }
 
-    var token = passman.createJWTToken(message,1);
+    var token = agentAuth.signCommand(message, 1);
 
     if(commsType=="mqtt" && serverConfig.mqtt.enabled=="true" && isTransportProtocolConnected("mqtt",false))mqttTransport.publishMessage(command_topic,token);
     else if(commsType=="websocket")webSocketServer.publishMessage(agent_id,command_topic,token);
@@ -67,7 +68,7 @@ function pingAgent(commsType, agent_id){
         topic: command_topic,
         command: "ping"
     }
-    var token = passman.createJWTToken(message,1);
+    var token = agentAuth.signCommand(message, 1);
     
     //logger.debug("serverConfig.mqtt.enabled: " + serverConfig.mqtt.enabled);
     //logger.debug("Is connected: " + isTransportProtocolConnected("mqtt",false));
@@ -101,6 +102,7 @@ function sendEnrollment(agentId, token) {
         command: 'enroll',
         commandParams: token,
     };
+    // The agent does not have the token yet, so this message stays on the hub key.
     const jwtToken = passman.createJWTToken(message, 1);
     return webSocketServer.sendDirect(agentId, jwtToken);
 }
