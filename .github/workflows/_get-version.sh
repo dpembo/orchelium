@@ -42,8 +42,8 @@ else
     echo "DEBUG: All tags returned by API:" >&2
     echo "$all_tag_names" | sed 's/^/  /' >&2
     
-    # Filter for today's date (tags have 'v' prefix, e.g. v2026.03.28.01)
-    today_tags=$(echo "$all_tag_names" | grep "^v${today}\." | sort -V)
+    # Filter for today's date (tags have 'v' prefix, e.g. v2026.03.28.01 or v2026.03.28.01-rc)
+    today_tags=$(echo "$all_tag_names" | grep -E "^v${today}\.[0-9]{2}(-rc)?$" | sort -V || true)
     
     if [ -z "$today_tags" ]; then
       echo "DEBUG: No tags matching pattern ^v${today}\\. found" >&2
@@ -57,7 +57,7 @@ else
       
       # Extract counter from latest tag (remove 'v' prefix first)
       latest_tag_no_v="${latest_tag#v}"
-      if [[ "$latest_tag_no_v" =~ ^${today}\.([0-9]{2})$ ]]; then
+      if [[ "$latest_tag_no_v" =~ ^${today}\.([0-9]{2})(-rc)?$ ]]; then
         counter="${BASH_REMATCH[1]}"
         echo "DEBUG: Extracted counter: $counter" >&2
         next_counter=$(printf "%02d" $((10#$counter + 1)))

@@ -4,8 +4,22 @@ name: Build and Attest Release
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - develop
+          - reconnect
+          - patch-2
+      other_branch:
+        description: 'Another branch name. When filled, this is built instead of the selection above.'
+        required: false
+        type: string
       version:
-        description: 'Version number for the Docker image (e.g., 2026.03.22.01) — leave blank for auto-versioning'
+        description: 'Version number for the Docker image (e.g., 2026.03.22.01) — leave blank for auto-versioning. Builds that are not from main get -rc added.'
         required: false
         type: string
 
@@ -22,8 +36,36 @@ jobs:
 
 
     steps:
+      - name: Resolve branch
+        id: branch
+        env:
+          SELECTED: ${{ inputs.branch }}
+          OTHER: ${{ inputs.other_branch }}
+        run: |
+          set -euo pipefail
+          branch="${OTHER:-$SELECTED}"
+          branch="${branch#"${branch%%[![:space:]]*}"}"
+          branch="${branch%"${branch##*[![:space:]]}"}"
+          if [ -z "$branch" ]; then
+            echo "Branch is required."
+            exit 1
+          fi
+          if ! [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Branch name contains unsupported characters: $branch"
+            exit 1
+          fi
+          echo "Building branch: $branch"
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+          if [ "$branch" = "main" ]; then
+            echo "rc=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "rc=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.branch.outputs.name }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -36,22 +78,57 @@ jobs:
 
       - name: Set version (auto or manual)
         id: set_version
+        env:
+          MANUAL_VERSION: ${{ inputs.version }}
+          RELEASE_CANDIDATE: ${{ steps.branch.outputs.rc }}
         run: |
-          set -e
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            version="${{ github.event.inputs.version }}"
+          set -euo pipefail
+          if [ -n "$MANUAL_VERSION" ]; then
+            version="$MANUAL_VERSION"
             echo "Manual version input: $version"
           else
             echo "No manual version provided, attempting auto-versioning..."
-            chmod +x .github/workflows/_get-version.sh
-            version=$(.github/workflows/_get-version.sh "${{ secrets.GITHUB_TOKEN }}")
+            script="$(mktemp)"
+            curl -fsSL \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.raw" \
+              "https://api.github.com/repos/${{ github.repository }}/contents/.github/workflows/_get-version.sh?ref=${{ github.sha }}" \
+              -o "$script"
+            chmod +x "$script"
+            version=$("$script" "${{ secrets.GITHUB_TOKEN }}")
             if [ -z "$version" ]; then
               echo "Auto-versioning failed, please provide a version manually."
               exit 1
             fi
             echo "Auto-generated version: $version"
           fi
-          echo "version=$version" >> $GITHUB_OUTPUT
+          if [ "$RELEASE_CANDIDATE" = "true" ]; then
+            version="${version%-rc}-rc"
+            echo "Branch is not main; release candidate version: $version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Image tags
+        id: image_tags
+        env:
+          VERSION: ${{ steps.set_version.outputs.version }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          set -euo pipefail
+          {
+            echo "hub<<EOF"
+            if [ "$BRANCH" = "main" ]; then
+              echo "ghcr.io/dpembo/orchelium/hub:latest"
+            fi
+            echo "ghcr.io/dpembo/orchelium/hub:${VERSION}"
+            echo "EOF"
+            echo "agent<<EOF"
+            if [ "$BRANCH" = "main" ]; then
+              echo "ghcr.io/dpembo/orchelium/agent:latest"
+            fi
+            echo "ghcr.io/dpembo/orchelium/agent:${VERSION}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Reserve version tag
         shell: bash
@@ -60,7 +137,7 @@ jobs:
 
           tag="v${{ steps.set_version.outputs.version }}"
           repo="${{ github.repository }}"
-          sha="${{ github.sha }}"
+          sha="$(git rev-parse HEAD)"
 
           echo "Reserving tag ${tag} on ${repo} at ${sha}"
 
@@ -189,9 +266,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: |
-            ghcr.io/dpembo/orchelium/hub:latest
-            ghcr.io/dpembo/orchelium/hub:${{ steps.set_version.outputs.version }}
+          tags: ${{ steps.image_tags.outputs.hub }}
           labels: |
             org.opencontainers.image.title=dpembo/orchelium/hub
             org.opencontainers.image.version=${{ steps.set_version.outputs.version }}
@@ -212,9 +287,7 @@ jobs:
           context: .
           file: ./agent/Dockerfile
           push: true
-          tags: |
-            ghcr.io/dpembo/orchelium/agent:latest
-            ghcr.io/dpembo/orchelium/agent:${{ steps.set_version.outputs.version }}
+          tags: ${{ steps.image_tags.outputs.agent }}
           labels: |
             org.opencontainers.image.title=dpembo/orchelium/agent
             org.opencontainers.image.version=${{ steps.set_version.outputs.version }}
@@ -231,6 +304,10 @@ jobs:
       - name: Create Git Release
         shell: bash
         run: |
-          ./gitRelease.sh ${{ github.repository_owner }} ${{ github.event.repository.name }} ${{ github.ref_name }} ${{ secrets.PAT_TOKEN }} "v${{ steps.set_version.outputs.version }}" "v${{ steps.set_version.outputs.version }}" "Orchelium [v${{ steps.set_version.outputs.version }}]"
+          release_title="Orchelium [v${{ steps.set_version.outputs.version }}]"
+          if [ "${{ steps.branch.outputs.rc }}" = "true" ]; then
+            release_title="${release_title} release candidate"
+          fi
+          ./gitRelease.sh ${{ github.repository_owner }} ${{ github.event.repository.name }} ${{ steps.branch.outputs.name }} ${{ secrets.PAT_TOKEN }} "v${{ steps.set_version.outputs.version }}" "v${{ steps.set_version.outputs.version }}" "$release_title"
 
 
