@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0" />
+  <title>Orchelium | Webhooks</title>
+  <%- include('./partials/_head'); %>
+  <%- include('./partials/_scripts'); %>
+  <script>
+    function escapeHtml(text) {
+      if (!text) return '';
+      return String(text).replace(/[&<>"']/g, function (ch) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[ch];
+      });
+    }
+
+    function escapeQuotes(text) {
+      return String(text || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    }
+
+    function updateWebhookInfoBar(totalCount) {
+      var infoBar = document.getElementById('infobar');
+      if (infoBar) infoBar.textContent = 'Webhooks: ' + totalCount;
+    }
+
+    function editUrl(webhook) {
+      return '/webhookEdit.html?job=' + encodeURIComponent(webhook.jobName) + '&id=' + encodeURIComponent(webhook.id);
+    }
+
+    function loadWebhooks() {
+      fetch('/rest/webhooks-all')
+        .then(function (response) {
+          if (!response.ok) throw new Error('Failed to load webhooks');
+          return response.json();
+        })
+        .then(function (data) {
+          renderWebhooks(Array.isArray(data) ? data : (data.webhooks || []));
+        })
+        .catch(function (error) {
+          M.toast({ html: error.message || 'Failed to load webhooks', displayLength: 4000 });
+        });
+    }
+
+    function renderWebhooks(webhooks) {
+      var container = document.getElementById('webhookContainer');
+      updateWebhookInfoBar(webhooks.length);
+      if (!webhooks.length) {
+        container.innerHTML = ''
+          + '<div style="text-align: center; padding: 60px 20px; color: #999;">'
+          + '<i class="material-icons" style="font-size: 64px; color: #ddd; display: block; margin-bottom: 20px;" title="Webhook">webhook</i>'
+          + '<p>No webhooks yet</p>'
+          + '<a href="/webhookEdit.html" class="btn waves-effect waves-light orange"><i class="material-icons left">add</i>Create Webhook</a>'
+          + '</div>';
+        return;
+      }
+
+      var rows = webhooks.map(function (webhook) {
+        var last = webhook.lastTriggeredAt ? new Date(webhook.lastTriggeredAt).toLocaleString() : 'Never';
+        var status = webhook.isActive
+          ? '<span class="green-text">Active</span>'
+          : '<span class="grey-text">Inactive</span>';
+        return '<tr>'
+          + '<td><a href="' + editUrl(webhook) + '">' + escapeHtml(webhook.name) + '</a></td>'
+          + '<td>' + escapeHtml(webhook.jobName) + '</td>'
+          + '<td>' + escapeHtml(webhook.description || '') + '</td>'
+          + '<td>' + status + '</td>'
+          + '<td>' + (webhook.triggerCount || 0) + '</td>'
+          + '<td>' + escapeHtml(last) + '</td>'
+          + '<td>'
+          + '<a title="edit" href="' + editUrl(webhook) + '"><i class="material-icons tableIconButton vertMid">edit</i></a>'
+          + '<a title="delete" onclick="deleteWebhook(\'' + escapeQuotes(webhook.jobName) + '\', \'' + escapeQuotes(webhook.id) + '\', \'' + escapeQuotes(webhook.name) + '\')"><i class="material-icons tableIconButton vertMid" style="cursor: pointer;">delete</i></a>'
+          + '</td>'
+          + '</tr>';
+      }).join('');
+
+      container.innerHTML = '<table><tr>'
+        + '<th>Name</th><th>Job</th><th>Description</th><th>Status</th><th>Triggers</th><th>Last Triggered</th><th>Actions</th>'
+        + '</tr><tbody>' + rows + '</tbody></table>';
+    }
+
+    function deleteWebhook(jobName, id, name) {
+      if (!confirm('Delete webhook "' + name + '"?')) return;
+      fetch('/rest/webhooks/' + encodeURIComponent(jobName) + '/' + encodeURIComponent(id), { method: 'DELETE' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('Failed to delete webhook');
+          M.toast({ html: 'Webhook deleted' });
+          loadWebhooks();
+        })
+        .catch(function (error) {
+          M.toast({ html: error.message || 'Failed to delete webhook', displayLength: 4000 });
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', loadWebhooks);
+  </script>
+</head>
+<body>
+  <%- include('./partials/_header'); %>
+  <div class="section no-pad-bot" id="index-banner">
+    <div class="container wide-table">
+      <div class="row">
+        <div class="col s6">
+          <h5 class="header orange-text">Webhooks</h5>
+        </div>
+        <div class="col s6" style="text-align: right; padding-top: 20px;">
+          <a title="add" href="/webhookEdit.html"><span style="font-size:24pt" class="material-icons vertTop tableIconButton">add_circle</span></a>
+        </div>
+      </div>
+      <div class="scheduleTable">
+        <div id="webhookContainer">
+          <div style="text-align: center; padding: 40px;">
+            <p>Loading webhooks...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <%- include('./partials/_footer'); %>
+</body>
+</html>

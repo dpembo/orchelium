@@ -141,6 +141,17 @@ app.post('/settings.html', validateCsrf, User.isAuthenticated, User.requirePermi
 
   confighandler.saveServerConfig();
 
+  try {
+    if (typeof webSocketServer !== 'undefined' && webSocketServer.applyWebSocketSetting) {
+      await webSocketServer.applyWebSocketSetting();
+    }
+    if (typeof mqttTransport !== 'undefined' && mqttTransport.startMqttConnectionProcess) {
+      await mqttTransport.startMqttConnectionProcess(true);
+    }
+  } catch (err) {
+    logger.error('Applying agent connection settings failed: ' + err.message);
+  }
+
   return res.redirect('/settings.html?message="Saved+Settings.+Please+restart+the+container+for+the+values+to+take+effect');
   //res.render('settings.ejs', { serverConfig, user });
 });

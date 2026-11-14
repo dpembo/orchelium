@@ -116,7 +116,6 @@ mqttTransport = require ("./communications/mqttTransport.js");
 
 webSocketBrowser = require('./communications/wsBrowserTransport.js');
 webSocketServer = require("./communications/wsServerTransport.js");
-webSocketServer.init();
 
 let encryptionKeyState = null;
 const ENCRYPTION_KEY_NOTICE_TITLE = 'Default encryption key in use';
@@ -229,6 +228,7 @@ const hubBootPromise = (async () => {
     }
 
     serverConfig = confighandler.processServerConfig(serverConfig);
+    await webSocketServer.init();
     mqttTransport.init();
 
     User.init('./data/user.db', logger, notifier);

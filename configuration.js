@@ -75,6 +75,34 @@ function processServerConfig() {
     }
   }
 
+  if (obj.websocket_server === undefined || obj.websocket_server === null) {
+    obj.websocket_server = { port: 49981, enabled: "true" };
+    needsave = true;
+  } else if (obj.websocket_server.enabled === undefined || obj.websocket_server.enabled === null || obj.websocket_server.enabled === '') {
+    obj.websocket_server.enabled = "true";
+    needsave = true;
+  } else if (obj.websocket_server.enabled === true) {
+    obj.websocket_server.enabled = "true";
+    needsave = true;
+  } else if (obj.websocket_server.enabled === false) {
+    obj.websocket_server.enabled = "false";
+    needsave = true;
+  }
+
+  if (obj.mqtt === undefined || obj.mqtt === null) {
+    obj.mqtt = { enabled: "false" };
+    needsave = true;
+  } else if (obj.mqtt.enabled === undefined || obj.mqtt.enabled === null || obj.mqtt.enabled === '') {
+    obj.mqtt.enabled = "false";
+    needsave = true;
+  } else if (obj.mqtt.enabled === true) {
+    obj.mqtt.enabled = "true";
+    needsave = true;
+  } else if (obj.mqtt.enabled === false) {
+    obj.mqtt.enabled = "false";
+    needsave = true;
+  }
+
   if (obj.pluginRegistry === undefined || obj.pluginRegistry === null) {
       obj.pluginRegistry = {};
       obj.pluginRegistry.url = "https://orchelium.com/plugins/registry/";
@@ -175,6 +203,8 @@ function loadConfigJson(filename) {
       reconciliationIntervalSeconds: 60
     };
     inConfigObj.websocket_server.port=49981;
+    inConfigObj.websocket_server.enabled="true";
+    inConfigObj.mqtt.enabled="false";
     
     //Default timezone (from env or set to UTC if not present)
     inConfigObj.server.timezone = process.env.TZ || "UTC";

@@ -8,8 +8,6 @@ const agentAuth = require('./agentAuth');
 
 // Configuration. Command and status topic names come from shared/protocol
 // and are chosen by the caller (agentCommunication) when it publishes.
-const PORT = serverConfig.websocket_server.port;
-
 // State management
 const wsClients = new Map(); // connectionId -> WebSocket
 const agentToConnection = new Map(); // agentId -> connectionId
@@ -64,12 +62,32 @@ async function sendInfoNotificationMessage(agentId, duration) {
     );
 }
 
-const server = new WebSocket.Server({ port: PORT });
-logger.info(`WebSocket server started on ws://localhost:${PORT}`);
+let server = null;
+let listeningPort = null;
 
-async function init() {
-    logger.info("WebSocket Server Initializing");
-    server.on('connection', async (ws, request) => {
+function websocketEnabled() {
+    const value = serverConfig.websocket_server && serverConfig.websocket_server.enabled;
+    if (value === undefined || value === null || value === '') return true;
+    return value === true || String(value).toUpperCase() === 'TRUE';
+}
+
+function closeListener() {
+    return new Promise((resolve) => {
+        const current = server;
+        if (!current) return resolve();
+        for (const client of wsClients.values()) {
+            try { client.close(1001, 'websocket disabled'); } catch (err) { /* already closing */ }
+        }
+        current.close(() => {
+            server = null;
+            listeningPort = null;
+            resolve();
+        });
+    });
+}
+
+function bindServer(wsServer) {
+    wsServer.on('connection', async (ws, request) => {
         const queryParams = url.parse(request.url, true).query;
         const claimedName = queryParams.name || '';
         const agentId = claimedName.split('~')[0];
@@ -229,6 +247,33 @@ async function init() {
     });
 }
 
+async function applyWebSocketSetting() {
+    if (!websocketEnabled()) {
+        if (server) {
+            logger.info('WebSocket server disabled. Closing the agent listener.');
+            await closeListener();
+        } else {
+            logger.info('WebSocket server is disabled. The agent listener will not start.');
+        }
+        return;
+    }
+
+    const port = Number(serverConfig.websocket_server && serverConfig.websocket_server.port);
+    if (!port) throw new Error('WebSocket server port is not set');
+    if (server && listeningPort === port) return;
+    if (server) await closeListener();
+
+    server = new WebSocket.Server({ port });
+    listeningPort = port;
+    bindServer(server);
+    logger.info(`WebSocket server started on ws://localhost:${port}`);
+}
+
+async function init() {
+    logger.info("WebSocket Server Initializing");
+    await applyWebSocketSetting();
+}
+
 function promotePending(agentId) {
     const connectionId = pendingConnections.get(agentId);
     if (!connectionId || !socketIsOpen(wsClients.get(connectionId))) return false;
@@ -311,4 +356,4 @@ function handleLogMessage(message) {
     logger.debug(`Log message from client: ${JSON.stringify(message)}`);
 }
 
-module.exports = { init, sendCommand, publishMessage, publishPing, hasOpenConnection, sendDirect, forceCloseRemove, promotePending };
+module.exports = { init, applyWebSocketSetting, sendCommand, publishMessage, publishPing, hasOpenConnection, sendDirect, forceCloseRemove, promotePending };

@@ -125,7 +125,20 @@ function noValue(inValue){
       <input id="webserverPort" type="text" name="webserverPort" value="8082" required>
       <label for="wsPort">WebSocket Server Port *</label>
       <input id="wsPort" type="text" name="wsPort" value="49981" required>
-      
+
+      <p>Agents connect over WebSocket by default. Leave MQTT off unless you run your own broker.</p>
+      <p>
+        <label>
+          <input type="checkbox" name="websocket" class="filled-in" <%= (serverConfig.websocket_server && serverConfig.websocket_server.enabled === 'false') ? '' : 'checked' %> />
+          <span>WebSocket server</span>
+        </label>
+      </p>
+      <p>
+        <label>
+          <input type="checkbox" name="mqtt" class="filled-in" <%= (serverConfig.mqtt && serverConfig.mqtt.enabled === 'true') ? 'checked' : '' %> />
+          <span>External MQTT server</span>
+        </label>
+      </p>
       
       <button class="btn waves-effect waves-light" style="line-height:0px" type="submit">Next</button>
       <button class="btn waves-effect waves-light red" style="line-height:0px" onclick="skip()">Cancel</button>

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0" />
+  <title>Orchelium | Webhook</title>
+  <%- include('./partials/_head'); %>
+  <%- include('./partials/_scripts'); %>
+  <script>
+    var webhookJob = <%- JSON.stringify(jobName || '') %>;
+    var webhookId = <%- JSON.stringify(webhookId || '') %>;
+
+    function selectedJob() {
+      var field = document.getElementById('webhookJob');
+      return field ? field.value : webhookJob;
+    }
+
+    function triggerUrl(jobName) {
+      return window.location.origin + '/api/webhook/trigger/' + encodeURIComponent(jobName || '') + '?key=YOUR_API_KEY';
+    }
+
+    function showKey(apiKey) {
+      var panel = document.getElementById('webhookKeyPanel');
+      document.getElementById('apiKeyDisplay').value = apiKey;
+      document.getElementById('shownTriggerUrl').textContent = window.location.origin
+        + '/api/webhook/trigger/' + encodeURIComponent(selectedJob());
+      panel.style.display = 'block';
+    }
+
+    function loadJobs(selected) {
+      return fetch('/rest/schedules')
+        .then(function (response) {
+          if (!response.ok) throw new Error('Failed to load jobs');
+          return response.json();
+        })
+        .then(function (schedules) {
+          var selector = document.getElementById('webhookJob');
+          (schedules || []).forEach(function (schedule) {
+            var jobName = schedule.jobName || schedule.name;
+            if (!jobName) return;
+            var option = document.createElement('option');
+            option.value = jobName;
+            option.textContent = jobName;
+            if (jobName === selected) option.selected = true;
+            selector.appendChild(option);
+          });
+          if (window.M && M.FormSelect) M.FormSelect.init(selector);
+        });
+    }
+
+    function loadWebhook() {
+      if (!webhookId) {
+        document.getElementById('webhookTriggerUrl').textContent = triggerUrl('');
+        return loadJobs('');
+      }
+      return fetch('/rest/webhooks-all')
+        .then(function (response) {
+          if (!response.ok) throw new Error('Failed to load webhook');
+          return response.json();
+        })
+        .then(function (data) {
+          var webhooks = Array.isArray(data) ? data : (data.webhooks || []);
+          var webhook = webhooks.find(function (item) {
+            return item.id === webhookId && item.jobName === webhookJob;
+          });
+          if (!webhook) throw new Error('Webhook not found');
+          document.getElementById('webhookName').value = webhook.name || '';
+          document.getElementById('webhookDescription').value = webhook.description || '';
+          document.getElementById('webhookActive').checked = webhook.isActive !== false;
+          document.getElementById('activeField').style.display = 'block';
+          document.getElementById('rotateKeyBtn').style.display = 'inline-block';
+          document.getElementById('webhookTriggerUrl').textContent = triggerUrl(webhook.jobName);
+          document.getElementById('pageTitle').textContent = webhook.name || 'Webhook';
+          if (window.M && M.updateTextFields) M.updateTextFields();
+          if (window.M && M.textareaAutoResize) M.textareaAutoResize($('#webhookDescription'));
+          return loadJobs(webhook.jobName).then(function () {
+            document.getElementById('webhookJob').disabled = true;
+            if (window.M && M.FormSelect) {
+              var instance = M.FormSelect.getInstance(document.getElementById('webhookJob'));
+              if (instance) instance.destroy();
+              M.FormSelect.init(document.getElementById('webhookJob'));
+            }
+          });
+        });
+    }
+
+    function saveWebhook() {
+      var name = document.getElementById('webhookName').value.trim();
+      var description = document.getElementById('webhookDescription').value.trim();
+      var jobName = selectedJob();
+      if (!name) {
+        M.toast({ html: 'Webhook name is required', displayLength: 3000 });
+        return;
+      }
+      if (!jobName) {
+        M.toast({ html: 'Choose a job', displayLength: 3000 });
+        return;
+      }
+      var isCreate = !webhookId;
+      var url = isCreate
+        ? '/rest/webhooks/' + encodeURIComponent(jobName)
+        : '/rest/webhooks/' + encodeURIComponent(webhookJob) + '/' + encodeURIComponent(webhookId);
+      var payload = { name: name, description: description };
+      if (!isCreate) payload.isActive = document.getElementById('webhookActive').checked;
+      fetch(url, {
+        method: isCreate ? 'POST' : 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+        .then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            if (!response.ok) throw new Error(data.error || data.message || 'Unable to save webhook');
+            return data;
+          });
+        })
+        .then(function (data) {
+          if (isCreate && data.webhook && data.webhook.apiKey) {
+            webhookId = data.webhook.id;
+            webhookJob = jobName;
+            history.replaceState(null, '', '/webhookEdit.html?job=' + encodeURIComponent(jobName) + '&id=' + encodeURIComponent(webhookId));
+            document.getElementById('pageTitle').textContent = name;
+            document.getElementById('activeField').style.display = 'block';
+            document.getElementById('rotateKeyBtn').style.display = 'inline-block';
+            document.getElementById('webhookJob').disabled = true;
+            document.getElementById('webhookTriggerUrl').textContent = triggerUrl(jobName);
+            showKey(data.webhook.apiKey);
+            return;
+          }
+          M.toast({ html: 'Webhook saved' });
+        })
+        .catch(function (error) {
+          M.toast({ html: error.message, displayLength: 4000 });
+        });
+    }
+
+    function rotateKey() {
+      if (!webhookId || !confirm('Rotate the API key? The current key will stop working.')) return;
+      fetch('/rest/webhooks/' + encodeURIComponent(webhookJob) + '/' + encodeURIComponent(webhookId) + '/rotate-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}'
+      })
+        .then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            if (!response.ok) throw new Error(data.error || data.message || 'Unable to rotate the key');
+            return data.apiKey || (data.webhook && data.webhook.apiKey);
+          });
+        })
+        .then(function (apiKey) {
+          if (!apiKey) throw new Error('The new key was not returned');
+          showKey(apiKey);
+        })
+        .catch(function (error) {
+          M.toast({ html: error.message, displayLength: 4000 });
+        });
+    }
+
+    function copyKey() {
+      var field = document.getElementById('apiKeyDisplay');
+      field.select();
+      document.execCommand('copy');
+      M.toast({ html: 'API key copied' });
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+      document.getElementById('webhookJob').addEventListener('change', function () {
+        document.getElementById('webhookTriggerUrl').textContent = triggerUrl(selectedJob());
+      });
+      loadWebhook().catch(function (error) {
+        M.toast({ html: error.message, displayLength: 4000 });
+      });
+    });
+  </script>
+</head>
+<body>
+  <%- include('./partials/_header'); %>
+  <div class="container">
+    <h5 id="pageTitle" class="header orange-text"><%= webhookId ? 'Webhook' : 'New Webhook' %></h5>
+    <div class="row">
+      <div class="input-field col s12">
+        <input id="webhookName" type="text">
+        <label for="webhookName">Name</label>
+      </div>
+      <div class="input-field col s12">
+        <textarea id="webhookDescription" class="materialize-textarea"></textarea>
+        <label for="webhookDescription">Description</label>
+      </div>
+      <div class="input-field col s12">
+        <select id="webhookJob">
+          <option value="" disabled selected>Choose a job</option>
+        </select>
+        <label>Job</label>
+      </div>
+      <div id="activeField" class="col s12" style="display: none; margin-bottom: 20px;">
+        <label>
+          <input id="webhookActive" type="checkbox" class="filled-in" checked="checked" />
+          <span>Active</span>
+        </label>
+      </div>
+      <div class="col s12" style="margin-bottom: 20px;">
+        <p class="grey-text" style="margin-bottom: 6px;">Trigger URL</p>
+        <code id="webhookTriggerUrl" style="word-break: break-all;"></code>
+      </div>
+      <div id="webhookKeyPanel" class="col s12" style="display: none;">
+        <div class="card-panel orange lighten-4">
+          <p><strong>Copy this API key now. It will not be shown again.</strong></p>
+          <div class="input-field">
+            <input id="apiKeyDisplay" type="text" readonly>
+            <label for="apiKeyDisplay" class="active">API key</label>
+          </div>
+          <p>Send it as <code>X-Webhook-Key</code> or <code>?key=</code> to <code id="shownTriggerUrl"></code></p>
+          <button type="button" class="btn-flat orange-text" onclick="copyKey()">Copy key</button>
+        </div>
+      </div>
+      <div class="col s12">
+        <button type="button" class="btn orange" onclick="saveWebhook()">Save</button>
+        <button type="button" id="rotateKeyBtn" class="btn-flat" style="display: none;" onclick="rotateKey()">Rotate key</button>
+        <a href="/webhooks.html" class="btn-flat">Back to webhooks</a>
+      </div>
+    </div>
+  </div>
+  <%- include('./partials/_footer'); %>
+</body>
+</html>

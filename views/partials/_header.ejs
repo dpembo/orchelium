@@ -68,13 +68,8 @@
       <% if (hasPerm('jobs.view')) { %>
       <li><a href="/scheduleList.html" title="Jobs"><span title="Jobs" style="font-size:24pt" class="navicon material-icons vertMid">calendar_month</span></a></li>
       <% } %>
-      <% if (hasPerm('agents.view')) { %>
-      <li id="agentsIconContainer">
-        <a href="/agentstatus.html" title="Agents">
-          <span title="Agents" style="font-size:24pt" class="navicon material-icons vertMid">hub</span>
-          <span class="agent-badge-hidden" id="agentBadge"></span>
-        </a>
-      </li>
+      <% if (hasPerm('settings.access')) { %>
+      <li><a href="/webhooks.html" title="Webhooks"><span title="Webhooks" style="font-size:24pt" class="navicon material-icons vertMid">webhook</span></a></li>
       <% } %>
       <% if (hasPerm('orchestrations.view')) { %>
       <li><a href="/orchestrationList.html" title="Orchestrations"><span title="Orchestrations" style="font-size:24pt" class="navicon material-icons vertMid">schema</span></a></li>
@@ -84,6 +79,14 @@
       <% } %>
       <li id="topMenuSpacer"></li>
       <!--<li><a style="padding:6px" href="profile.html" title="User Profile"><span title="User Profile" class="mdi mdi-account" style="font-size:24pt"></span></a></li>-->
+      <% if (hasPerm('agents.view')) { %>
+      <li id="agentsIconContainer">
+        <a href="/agentstatus.html" title="Agents">
+          <span title="Agents" style="font-size:24pt" class="navicon material-icons vertMid">hub</span>
+          <span class="agent-badge-hidden" id="agentBadge"></span>
+        </a>
+      </li>
+      <% } %>
       <li id="notificationsOpenButton">
         <a href="#!" id="notificationMenu" class="btn-open-panel">
           <span title="Notifications" style="font-size:24pt" class="navicon material-icons vertMid">notifications</span>
@@ -100,8 +103,8 @@
       <% if (hasPerm('jobs.view')) { %>
       <li><a href="/scheduleList.html" title="Job Schedule" style="color:#ffffff"><span title="Job Schedule" style="font-size:24pt" class="material-icons vertMid">calendar_month</span>&nbsp;Job Schedule</a></li>
       <% } %>
-      <% if (hasPerm('agents.view')) { %>
-      <li><a href="/agentstatus.html" title="Agents" style="color:#ffffff"><span title="Agents" style="font-size:24pt" class="material-icons vertMid">hub</span>&nbsp;Agents</a></li>
+      <% if (hasPerm('settings.access')) { %>
+      <li><a href="/webhooks.html" title="Webhooks" style="color:#ffffff"><span title="Webhooks" style="font-size:24pt" class="material-icons vertMid">webhook</span>&nbsp;Webhooks</a></li>
       <% } %>
       <% if (hasPerm('orchestrations.view')) { %>
       <li><a href="/orchestrationList.html" title="Orchestrations" style="color:#ffffff"><span title="Orchestrations" style="font-size:24pt" class="material-icons vertMid">schema</span>&nbsp;Orchestrations</a></li>
@@ -110,8 +113,9 @@
       <li><a href="/scriptList.html" title="Script List and Editor" style="color:#ffffff"><span title="Script List and Editor" style="font-size:24pt" class="material-icons vertMid">terminal</span>&nbsp;Scripts</a></li>
       <% } %>
       <li class="divider"></li>
-      <!--<li><a class="btn-open-panel" href="#" title="Notifications"><span title="Notifications" style="font-size:24pt" class="material-icons vertMid">notifications</span>Notifications</a></li>-->
- 
+      <% if (hasPerm('agents.view')) { %>
+      <li><a href="/agentstatus.html" title="Agents" style="color:#ffffff"><span title="Agents" style="font-size:24pt" class="material-icons vertMid">hub</span>&nbsp;Agents</a></li>
+      <% } %>
       <li><a href="/profile.html" title="User Info" style="color:#ffffff"><span title="User Info" style="font-size:24pt" class="material-icons vertMid">account_circle</span>&nbsp;User Profile</a></li>
       <% if (hasPerm('settings.access')) { %>
       <li><a href="/settings.html" title="Settings" style="color:#ffffff"><span title="Settings" style="font-size:24pt" class="material-icons vertMid">settings</span>&nbsp;Settings</a></li>

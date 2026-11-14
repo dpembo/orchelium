@@ -273,20 +273,30 @@ app.post('/initial-setup-server.html', validateCsrf, User.isAuthenticated, async
     return res.redirect('/register.html?not+authenticated');
   }
 
-  var { wsServer,webserverPort, wsPort,timezone} = req.body;
-  //var mqttEnabled = serverConfig.mqtt.enabled;
+  var { wsServer,webserverPort, wsPort,timezone, websocket, mqtt} = req.body;
+  const websocketEnabled = websocket === "on" ? "true" : "false";
+  const mqttEnabled = mqtt === "on" ? "true" : "false";
+  if (websocketEnabled === "false" && mqttEnabled === "false") {
+    return res.redirect('/initial-setup-server.html?message=' + encodeURIComponent('Enable WebSocket or MQTT so agents have a way to connect.'));
+  }
   serverConfig.websocket_server.server = wsServer;
   serverConfig.server.hostname = wsServer;
   serverConfig.server.port = webserverPort;
   serverConfig.websocket_server.port = wsPort;
+  serverConfig.websocket_server.enabled = websocketEnabled;
+  serverConfig.mqtt.enabled = mqttEnabled;
   
   serverConfig.server.timezone = timezone;
 
   confighandler.saveServerConfig();
-  
-  //if(mqttEnabled=="true")return res.redirect('/initial-setup-mqtt.html');
+  if (typeof webSocketServer !== 'undefined' && webSocketServer.applyWebSocketSetting) {
+    await webSocketServer.applyWebSocketSetting();
+  }
+  if (mqttEnabled === "true") return res.redirect('/initial-setup-mqtt.html');
+  if (typeof mqttTransport !== 'undefined' && mqttTransport.startMqttConnectionProcess) {
+    await mqttTransport.startMqttConnectionProcess(true);
+  }
   return res.redirect('/initial-setup-complete.html');
-  //if(mqttEnabled=="false")res.redirect('/initial-setup.html?message=One+of+WebSocket+or+MQTT+must+be+checked');
 });
 
 app.post('/initial-setup1.html', validateCsrf, User.isAuthenticated, async (req, res) => {
@@ -300,11 +310,13 @@ app.post('/initial-setup1.html', validateCsrf, User.isAuthenticated, async (req,
   logger.warn(`[ICONS_RESET] Previous icons: ${JSON.stringify(serverConfig.job_icons)}`);
 
   var { websocket,mqtt} = req.body;
-  var mqttEnabled = "false";
+  const websocketEnabled = websocket === "on" ? "true" : "false";
+  const mqttEnabled = mqtt === "on" ? "true" : "false";
+  if (websocketEnabled === "false" && mqttEnabled === "false") {
+    return res.redirect('/initial-setup1.html?message=' + encodeURIComponent('Enable WebSocket or MQTT so agents have a way to connect.'));
+  }
 
-  if(mqtt && mqtt=="on")mqttEnabled="true";
-
-  serverConfig.websocket_server.enabled = "true";
+  serverConfig.websocket_server.enabled = websocketEnabled;
   serverConfig.mqtt.enabled = mqttEnabled;
 
   serverConfig.job_icons=[

@@ -248,6 +248,18 @@ app.get('/rest/webhooks-all', User.isAuthenticated, User.requirePermission(PERMI
   }
 }));
 
+app.get('/webhooks.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), (req, res) => {
+  res.render('webhooks', { csrf: req.csrfToken() });
+});
+
+app.get('/webhookEdit.html', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), (req, res) => {
+  res.render('webhookEdit', {
+    csrf: req.csrfToken(),
+    jobName: typeof req.query.job === 'string' ? req.query.job : '',
+    webhookId: typeof req.query.id === 'string' ? req.query.id : '',
+  });
+});
+
 app.get('/rest/webhooks-stats', User.isAuthenticated, User.requirePermission(PERMISSIONS.SETTINGS_ACCESS), asyncHandler(async (req, res) => {
   try {
     const webhooksData = require('../webhooksData.js');

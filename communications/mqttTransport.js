@@ -10,6 +10,28 @@ var client;
 let mqttReconnectTimeout;
 var connectionTimeoutCallback;
 var mqttConnected = false;
+let mqttSession = 0;
+
+function mqttIsEnabled() {
+  const value = serverConfig.mqtt && serverConfig.mqtt.enabled;
+  return value === true || String(value || '').toUpperCase() === 'TRUE';
+}
+
+function disconnectMqtt() {
+  mqttSession += 1;
+  clearTimeout(connectionTimeoutCallback);
+  clearTimeout(mqttReconnectTimeout);
+  const current = client;
+  client = null;
+  mqttConnected = false;
+  if (!current) return;
+  current.removeAllListeners();
+  try {
+    current.end(true);
+  } catch (err) {
+    logger.warn('Failed to close the MQTT client: ' + err.message);
+  }
+}
 
 
 
@@ -18,7 +40,7 @@ var mqttConnected = false;
  *********************************/
 async function startMqttConnectionProcess(reset){
   
-    if(serverConfig.mqtt.enabled=="true")
+    if(mqttIsEnabled())
     {
       logger.info("Initiating MQTT Connection");
       logger.debug(`reset = ${reset}`); 
@@ -30,7 +52,7 @@ async function startMqttConnectionProcess(reset){
         logger.debug(`isMQTTSet() = ${confighandler.isMQTTSet()}`);
         logger.debug(`isMQTTConnected() = ${isMQTTConnected()}`);
 
-        if(serverConfig.mqtt.enabled=="true" &&confighandler.isMQTTSet()  && !isMQTTConnected()){
+        if(confighandler.isMQTTSet()  && !isMQTTConnected()){
           logger.warn("Connection is not operational - restarting");
           return await connectToMqttServerOnStartup();
         }
@@ -41,7 +63,9 @@ async function startMqttConnectionProcess(reset){
     }
     else
     {
-      logger.info("MQTT is not enabled");
+      logger.info("MQTT is not enabled. Closing any broker connection.");
+      disconnectMqtt();
+      return "disabled";
     }
   }
   
@@ -84,48 +108,82 @@ async function startMqttConnectionProcess(reset){
 
  
   function isMQTTConnected(){
+    if (!mqttIsEnabled()) return false;
     if(client && client.connected)return true;
     else return false;
   }
   
   
   function connectToMQTTServerWithTimeout(brokerUrl, clientOptions, timeout) {
+    if (!mqttIsEnabled()) {
+      disconnectMqtt();
+      return Promise.reject(new Error('MQTT is disabled'));
+    }
     logger.info("Connecting to MQTT Server; Broker URL: " + brokerUrl);
+    const session = mqttSession;
     return new Promise((resolve, reject) => {
-        client = mqtt.connect(brokerUrl, clientOptions);
+        let settled = false;
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(connectionTimeoutCallback);
+          fn(value);
+        };
+        const socket = mqtt.connect(brokerUrl, clientOptions);
+        client = socket;
+
+        const abandon = () => {
+          try { socket.end(true); } catch (err) { /* already closed */ }
+          if (client === socket) {
+            client = null;
+            mqttConnected = false;
+          }
+        };
 
         // MQTT client connect event
-        client.on('connect', () => {
+        socket.on('connect', () => {
+          if (!mqttIsEnabled() || session !== mqttSession) {
+            abandon();
+            finish(reject, new Error('MQTT is disabled'));
+            return;
+          }
           mqttConnected = true;
-          clearTimeout(connectionTimeoutCallback); // Clear the timeout if the connection succeeds
-          resolve(client); // Resolve the promise with the client object
+          finish(resolve, socket);
         });
 
         // MQTT client error event
-        client.on('error', (error) => {
-          clearTimeout(connectionTimeoutCallback); // Clear the timeout on error
+        socket.on('error', (error) => {
           mqttConnected = false;
-          client.end(); // Ensure the client is closed
           console.error('Failed to connect to MQTT broker:', error);
-          reject(error); // Reject the promise with the error
+          abandon();
+          finish(reject, error);
         });
 
         // Implement the timeout
         connectionTimeoutCallback = setTimeout(() => {
+          if (session !== mqttSession) {
+            finish(reject, new Error('MQTT is disabled'));
+            return;
+          }
           if(mqttConnected==false){
             console.error('Connection to MQTT broker timed out');
-            client.end(); // Close the client if the timeout occurs
-            reject(new Error('Connection timeout'));
+            abandon();
+            finish(reject, new Error('Connection timeout'));
           }
           else{
             console.info('Connection to MQTT broker ok');
-            resolve(client); // Resolve the promise with the client object
+            finish(resolve, socket);
           }
         }, timeout);
     });
 }
 
   function connectToMQTTServer(){
+    if (!mqttIsEnabled()) {
+      logger.info("MQTT is disabled. Not connecting to the broker.");
+      disconnectMqtt();
+      return;
+    }
     const connectionTimeout = 10000; // 10 seconds timeout (adjust as needed)
     let connected = false;
     var brokerUrl = 'mqtt://' + serverConfig.mqtt.server + ':' + serverConfig.mqtt.port;
@@ -140,14 +198,19 @@ async function startMqttConnectionProcess(reset){
     }
 
     connectToMQTTServerWithTimeout(brokerUrl, clientOptions, connectionTimeout)
-    .then(client => {
+    .then(connectedClient => {
+        if (!mqttIsEnabled()) {
+          disconnectMqtt();
+          return;
+        }
         logger.info('Successfully connected to MQTT broker');
         // Continue with your logic here
         mqttDisconnectNotificiationSent = false;
         logger.debug("subscribing to: " + status_topic);
-        client.subscribe(status_topic);
+        connectedClient.subscribe(status_topic);
         // Handle incoming messages
-        client.on('message', (topic, message) => {
+        connectedClient.on('message', (topic, message) => {
+           if (!mqttIsEnabled()) return;
            messProcessor.processMessage(topic, message,"mqtt");
         });
     })
@@ -280,6 +343,7 @@ async function startMqttConnectionProcess(reset){
   }
   
   function publishMessage(topic, message) {
+    if (!mqttIsEnabled()) return;
     logger.debug(`Publishing to MQTT: Topic [${topic}], Message: [${JSON.stringify(message)}]`);
     if(client&& client.connected){
         client.publish(topic, JSON.stringify(message), {
