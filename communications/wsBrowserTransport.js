@@ -40,6 +40,12 @@ function init(server) {
 
         socket.on('delete', async (data) => {
             logger.debug('[wsBrowserTransport] A delete request over websocket was requested for [' + data + ']');
+            try {
+                agentComms.sendRemoval(data);
+            } catch (err) {
+                logger.warn(`Failed to tell [${data}] it was removed: ${err.message}`);
+            }
+            webSocketServer.forceCloseRemove(data, 4001, 'removed');
             agents.deleteAgent(data);
             try {
                 await require('./agentAuth').forget(data);

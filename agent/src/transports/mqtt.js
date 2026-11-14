@@ -1,6 +1,7 @@
 const mqtt = require('mqtt');
 const { RetryBackoffManager } = require('./retry');
 const { publishStatusUpdate } = require('../publish');
+const runtime = require('../runtime');
 const { debug, DEBUG_LEVEL } = require('../log');
 
 class MqttHandler {
@@ -73,13 +74,14 @@ class MqttHandler {
       this.client.on('close', () => {
         this.isConnected = false;
         this.isConnecting = false;
+        if (runtime.removedByHub) return;
         this.retryConnection();
       });
     });
   }
 
   retryConnection() {
-    if (this.isReconnecting) return;
+    if (runtime.removedByHub || this.isReconnecting) return;
     this.isReconnecting = true;
 
     const retryDelay = this.retryManager.getNextRetryDelay();

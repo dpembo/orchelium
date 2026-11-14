@@ -23,6 +23,7 @@ function parseSettingsFile(filePath) {
           case 'MQTT_USERNAME': if (runtime.mqttUsernameIndex === -1) runtime.MQTT_USERNAME = value; break;
           case 'MQTT_PASSWORD': if (runtime.mqttPasswordIndex === -1) runtime.MQTT_PASSWORD = value; break;
           case 'AGENT_TOKEN': if (runtime.agentTokenIndex === -1) runtime.AGENT_TOKEN = value; break;
+          case 'AGENT_REMOVED': runtime.AGENT_REMOVED = value; break;
           case 'MQTT_ENABLED': if (!process.argv.includes('--mqttServer')) runtime.MQTT_ENABLED = value.toUpperCase() === 'TRUE'; break;
           case 'WS_SERVER': if (runtime.wsServerIndex === -1) runtime.WS_SERVER = value; break;
           case 'WS_PORT': if (runtime.wsPortIndex === -1) runtime.WS_SERVER_PORT = value; break;

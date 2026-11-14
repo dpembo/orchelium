@@ -17,7 +17,8 @@ var require_protocol = __commonJS({
       QUERY_METRIC: "queryMetric",
       TERMINATE_EXECUTION: "terminateExecution",
       ENROLL: "enroll",
-      ROTATE_TOKEN: "rotateToken"
+      ROTATE_TOKEN: "rotateToken",
+      REMOVED: "removed"
     });
     var AGENT_CAPABILITIES = Object.freeze({
       TOKEN: "agent-token",
@@ -234,6 +235,8 @@ var require_runtime = __commonJS({
       MQTT_USERNAME: mqttUsernameIndex !== -1 ? process.argv[mqttUsernameIndex + 1] : "",
       MQTT_PASSWORD: mqttPasswordIndex !== -1 ? process.argv[mqttPasswordIndex + 1] : "",
       AGENT_TOKEN: agentTokenIndex !== -1 ? process.argv[agentTokenIndex + 1] : "",
+      AGENT_REMOVED: "",
+      removedByHub: false,
       previousAgentToken: "",
       MQTT_ENABLED: process.argv.includes("--mqttServer"),
       WS_SERVER: wsServerIndex !== -1 ? process.argv[wsServerIndex + 1] : DEFAULT_WS_SERVER,
@@ -435,6 +438,9 @@ var require_settings = __commonJS({
                 break;
               case "AGENT_TOKEN":
                 if (runtime2.agentTokenIndex === -1) runtime2.AGENT_TOKEN = value;
+                break;
+              case "AGENT_REMOVED":
+                runtime2.AGENT_REMOVED = value;
                 break;
               case "MQTT_ENABLED":
                 if (!process.argv.includes("--mqttServer")) runtime2.MQTT_ENABLED = value.toUpperCase() === "TRUE";
@@ -1192,6 +1198,18 @@ var require_commands = __commonJS({
     var { livenessProbe } = require_liveness();
     var { writeSetting } = require_settings();
     var { openSecret } = require_secretBox();
+    function markRemovedFromHub() {
+      if (runtime2.removedByHub) return;
+      runtime2.removedByHub = true;
+      runtime2.AGENT_REMOVED = "true";
+      runtime2.AGENT_TOKEN = "";
+      runtime2.previousAgentToken = "";
+      writeSetting("AGENT_TOKEN", "");
+      writeSetting("AGENT_REMOVED", "true");
+      debug2(DEBUG_LEVEL2.ERROR, "Removed from the hub. This agent will not reconnect until it is deployed again.");
+      if (runtime2.wsClient && runtime2.wsClient.disconnect) runtime2.wsClient.disconnect();
+      if (runtime2.mqttClient && runtime2.mqttClient.disconnect) runtime2.mqttClient.disconnect();
+    }
     function storeEnrollment(commandParams) {
       writeSetting("AGENT_TOKEN", commandParams);
       debug2(DEBUG_LEVEL2.INFO, "Stored connection token");
@@ -1236,6 +1254,10 @@ var require_commands = __commonJS({
         debug2(DEBUG_LEVEL2.TRACE, `Context Env Vars: ${JSON.stringify(contextEnvVars)}`);
         if (agentId !== runtime2.AGENT_ID) return;
         const executionContext = executionContextFromPayload(decodedPayload);
+        if (command === COMMANDS.REMOVED) {
+          markRemovedFromHub();
+          return;
+        }
         if (command === COMMANDS.ENROLL) {
           if (!commandParams) {
             debug2(DEBUG_LEVEL2.ERROR, "Enrollment command did not include a token");
@@ -1306,7 +1328,7 @@ var require_commands = __commonJS({
         }
       });
     }
-    module2.exports = { handleCommand: handleCommand2, acceptFirstEnrollment };
+    module2.exports = { handleCommand: handleCommand2, acceptFirstEnrollment, markRemovedFromHub };
   }
 });
 
@@ -1368,6 +1390,7 @@ var require_mqtt = __commonJS({
     var mqtt = require("mqtt");
     var { RetryBackoffManager } = require_retry();
     var { publishStatusUpdate: publishStatusUpdate2 } = require_publish();
+    var runtime2 = require_runtime();
     var { debug: debug2, DEBUG_LEVEL: DEBUG_LEVEL2 } = require_log();
     var MqttHandler2 = class {
       constructor(server, port, options = {}) {
@@ -1432,12 +1455,13 @@ var require_mqtt = __commonJS({
           this.client.on("close", () => {
             this.isConnected = false;
             this.isConnecting = false;
+            if (runtime2.removedByHub) return;
             this.retryConnection();
           });
         });
       }
       retryConnection() {
-        if (this.isReconnecting) return;
+        if (runtime2.removedByHub || this.isReconnecting) return;
         this.isReconnecting = true;
         const retryDelay = this.retryManager.getNextRetryDelay();
         setTimeout(() => {
@@ -1489,7 +1513,7 @@ var require_websocket = __commonJS({
     var ReconnectingWebSocket = require("reconnecting-websocket");
     var { RetryBackoffManager } = require_retry();
     var { publishStatusUpdate: publishStatusUpdate2 } = require_publish();
-    var { acceptFirstEnrollment } = require_commands();
+    var { acceptFirstEnrollment, markRemovedFromHub } = require_commands();
     var runtime2 = require_runtime();
     var { debug: debug2, DEBUG_LEVEL: DEBUG_LEVEL2 } = require_log();
     function SafeWebSocket(url, protocols) {
@@ -1565,10 +1589,16 @@ var require_websocket = __commonJS({
             debug2(DEBUG_LEVEL2.INFO, `WebSocket server connected [${this.agentId}]`);
             resolve(this.client);
           });
-          this.client.addEventListener("close", () => {
+          this.client.addEventListener("close", (event) => {
             if (generation !== this.connectionGeneration) return;
             this.isConnected = false;
             this.isConnecting = false;
+            if (runtime2.removedByHub) return;
+            const code = event && (event.code || event.detail && event.detail.code);
+            if (code === 4001) {
+              markRemovedFromHub();
+              return;
+            }
             if (!this.isReconnecting) {
               this.triggerReconnect();
             }
@@ -1637,7 +1667,7 @@ var require_websocket = __commonJS({
         runtime2.activeIntervals.push(this.heartbeatIntervalId);
       }
       triggerReconnect() {
-        if (this.isReconnecting) return;
+        if (runtime2.removedByHub || this.isReconnecting) return;
         this.isReconnecting = true;
         if (this.reconnectTimeoutId) {
           clearTimeout(this.reconnectTimeoutId);
@@ -1892,7 +1922,9 @@ if (process.argv.includes("--debug")) {
   runtime.DEBUG_MODE = true;
   debug(DEBUG_LEVEL.WARN, "DEBUG ENABLED");
 }
-if (runtime.useMQTT) {
+if (runtime.AGENT_REMOVED === "true" && !runtime.AGENT_TOKEN) {
+  debug(DEBUG_LEVEL.ERROR, "This agent was removed from the hub. Deploy it again to connect.");
+} else if (runtime.useMQTT) {
   runtime.mqttClient = new MqttHandler(runtime.MQTT_SERVER, runtime.MQTT_SERVER_PORT, {
     connectionTimeout: runtime.RETRY_TIMEOUT,
     username: runtime.MQTT_USERNAME,

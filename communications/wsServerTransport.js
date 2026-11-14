@@ -229,20 +229,30 @@ async function init() {
     });
 }
 
-function forceCloseRemove(agentId) {
-    const connectionId = agentToConnection.get(agentId);
-    if (connectionId) {
+function promotePending(agentId) {
+    const connectionId = pendingConnections.get(agentId);
+    if (!connectionId || !socketIsOpen(wsClients.get(connectionId))) return false;
+    pendingConnections.delete(agentId);
+    agentToConnection.set(agentId, connectionId);
+    agentStatus.set(agentId, { disconnectTime: null, timer: null });
+    logger.info(`Approved waiting connection for agent [${agentId}]`);
+    return true;
+}
+
+function forceCloseRemove(agentId, code, reason) {
+    [agentToConnection, pendingConnections].forEach((map) => {
+        const connectionId = map.get(agentId);
+        if (!connectionId) return;
         const client = wsClients.get(connectionId);
-        if (client) {
-            try {
-                client.close();
-            } catch (err) {
-                logger.warn(`Error closing WS Client for agent ${agentId}`);
-            }
-            wsClients.delete(connectionId);
-            agentToConnection.delete(agentId);
+        map.delete(agentId);
+        wsClients.delete(connectionId);
+        if (!client) return;
+        try {
+            client.close(code || 1000, reason || 'removed');
+        } catch (err) {
+            logger.warn(`Error closing WS Client for agent ${agentId}`);
         }
-    }
+    });
 }
 
 function publishMessage(agentId, topic, message) {
@@ -301,4 +311,4 @@ function handleLogMessage(message) {
     logger.debug(`Log message from client: ${JSON.stringify(message)}`);
 }
 
-module.exports = { init, sendCommand, publishMessage, publishPing, hasOpenConnection, sendDirect, forceCloseRemove };
+module.exports = { init, sendCommand, publishMessage, publishPing, hasOpenConnection, sendDirect, forceCloseRemove, promotePending };

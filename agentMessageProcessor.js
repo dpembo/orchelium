@@ -104,8 +104,8 @@ async function processMessage(topic, message, protocol, socketAgentId) {
         }
       }
   
-      //Known agent registering
-      if (topic == status_topic && obj.status == "register") {
+      // A waiting agent stays unapproved until the registration form is submitted.
+      if (topic == status_topic && obj.status == "register" && agentKnown.status !== 'register') {
         agents.updateAgentStatus(obj.name, "online", "Agent Back Online",null,null,null,message,protocol);
       }
   
@@ -311,14 +311,11 @@ async function processMessage(topic, message, protocol, socketAgentId) {
       }
     }
     else {
-      //Register an unknown agent
+      // Show the agent for approval. It stays in the register state until accepted.
       if (topic == status_topic && obj.status == "register") {
-        if (agentAuth.hasCredential(obj.name)) {
-          obj.status = "online";
-          obj.description = "Agent online";
-        }
+        obj.description = obj.description || 'Awaiting approval';
         agents.addObjToAgentStatusDict(obj).catch(err => {
-          logger.error(`Failed to register unknown agent [${obj.name}]:`, err.message);
+          logger.error(`Failed to list waiting agent [${obj.name}]:`, err.message);
         });
         webSocketBrowser.emitNotification('register', `${message.toString()}`);
       }

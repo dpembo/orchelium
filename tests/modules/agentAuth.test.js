@@ -84,6 +84,23 @@ describe('agent connection decisions', () => {
       pendingSocket: true,
     })).toBe('reject');
   });
+
+  test('a valid token stays pending until the agent is approved', () => {
+    expect(agentAuth.decideConnection({
+      agentStatus: null,
+      tokenValid: true,
+    })).toBe('pending-accept');
+
+    expect(agentAuth.decideConnection({
+      agentStatus: 'register',
+      tokenValid: true,
+    })).toBe('pending-accept');
+
+    expect(agentAuth.decideConnection({
+      agentStatus: 'online',
+      tokenValid: true,
+    })).toBe('approve-replace');
+  });
 });
 
 describe('agent token seal', () => {

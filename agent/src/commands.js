@@ -10,6 +10,19 @@ const { livenessProbe } = require('./liveness');
 const { writeSetting } = require('./settings');
 const { openSecret } = require('../../shared/secretBox');
 
+function markRemovedFromHub() {
+  if (runtime.removedByHub) return;
+  runtime.removedByHub = true;
+  runtime.AGENT_REMOVED = 'true';
+  runtime.AGENT_TOKEN = '';
+  runtime.previousAgentToken = '';
+  writeSetting('AGENT_TOKEN', '');
+  writeSetting('AGENT_REMOVED', 'true');
+  debug(DEBUG_LEVEL.ERROR, 'Removed from the hub. This agent will not reconnect until it is deployed again.');
+  if (runtime.wsClient && runtime.wsClient.disconnect) runtime.wsClient.disconnect();
+  if (runtime.mqttClient && runtime.mqttClient.disconnect) runtime.mqttClient.disconnect();
+}
+
 function storeEnrollment(commandParams) {
   writeSetting('AGENT_TOKEN', commandParams);
   debug(DEBUG_LEVEL.INFO, 'Stored connection token');
@@ -64,6 +77,11 @@ async function handleCommand(message) {
     if (agentId !== runtime.AGENT_ID) return;
 
     const executionContext = executionContextFromPayload(decodedPayload);
+
+    if (command === COMMANDS.REMOVED) {
+      markRemovedFromHub();
+      return;
+    }
 
     if (command === COMMANDS.ENROLL) {
       if (!commandParams) {
@@ -143,4 +161,4 @@ async function handleCommand(message) {
   });
 }
 
-module.exports = { handleCommand, acceptFirstEnrollment };
+module.exports = { handleCommand, acceptFirstEnrollment, markRemovedFromHub };

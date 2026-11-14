@@ -46,7 +46,9 @@ if (process.argv.includes('--debug')) {
   debug(DEBUG_LEVEL.WARN, 'DEBUG ENABLED');
 }
 
-if (runtime.useMQTT) {
+if (runtime.AGENT_REMOVED === 'true' && !runtime.AGENT_TOKEN) {
+  debug(DEBUG_LEVEL.ERROR, 'This agent was removed from the hub. Deploy it again to connect.');
+} else if (runtime.useMQTT) {
   runtime.mqttClient = new MqttHandler(runtime.MQTT_SERVER, runtime.MQTT_SERVER_PORT, {
     connectionTimeout: runtime.RETRY_TIMEOUT,
     username: runtime.MQTT_USERNAME,

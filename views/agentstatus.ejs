@@ -61,6 +61,16 @@ function hasValidAgents(obj) {
     document.location.reload();
   }
 
+  function rejectAgent(agentName)
+  {
+    var choice = confirm("Reject the agent [" + agentName + "]? It will be removed and will not be able to connect.");
+    if(choice)
+    {
+      messageServer("delete",agentName);
+    }
+    document.location.reload();
+  }
+
   function updateAgent(inAgentName){
     const apiUrl = '/rest/agent/' + inAgentName;
     var elem = document.getElementById(inAgentName + "_ball");
@@ -712,11 +722,13 @@ function hasValidAgents(obj) {
             <% if (hasPerm('agents.edit')) { %>
             <a title="edit" href="/agentEdit.html?agentId=<%=value.name%>"><span class="material-icons tableIconButton">edit</i></a>
             <% } %>
-            <% if (hasPerm('agents.edit')) { %>
+            <% if (value.status=="register" && hasPerm('agents.edit')) { %>
+            <a href="#" onclick="rejectAgent('<%=value.name%>');" title="Reject" id="rejectAgent"><i class="tableIconButton material-icons">cancel</i></a>
+            <% } else if (hasPerm('agents.edit')) { %>
             <a href="#" onclick="deleteAgent('<%=value.name%>');" title="Delete Agent" id="deleteAgent"><i class="tableIconButton material-icons">delete</i></a>
             <% } %>
             <% if (value.status=="register"){%>
-            <a href="#" onclick="goToRegister(`<%=JSON.stringify(value)%>`);" title="Register" id="registerAgent"><i class="tableIconButton material-icons">app_registration</i></a>
+            <a href="#" onclick="goToRegister(`<%=JSON.stringify(value)%>`);" title="Approve" id="registerAgent"><i class="tableIconButton material-icons">app_registration</i></a>
             <%} else {%>
               <a href="#" onclick='pingTest("<%=value.name%>")' title="Ping" id="pingAgent"><i class="tableIconButton material-icons">restart_alt</i></a>
             <%}%>

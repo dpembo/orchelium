@@ -22,6 +22,12 @@ function sendCommand(agent_id, topic, command, commandParams, jobName, commsType
 
     if(manual===undefined||manual===null)manual=false;
 
+    var waiting = agents.getAgent(agent_id);
+    if (waiting && waiting.status === 'register') {
+        logger.warn(`Agent [${agent_id}] is waiting for approval. The command was not sent.`);
+        return;
+    }
+
     if(commsType===undefined||commsType===null){
         value = agents.getAgent(agent_id);
         if(value!=undefined && value!==null)commsType = value.commsType;
@@ -95,6 +101,24 @@ function pingAllAgents(agentStatusDict){
     }
 }
 
+function sendRemoval(agentId) {
+    const revealed = agentAuth.reveal(agentId);
+    if (!revealed || !revealed.token) return false;
+    const message = {
+        name: agentId,
+        topic: command_topic,
+        command: 'removed',
+    };
+    const jwtToken = passman.createJWTToken(message, 1, revealed.token);
+    const agent = agents.getAgent(agentId);
+    const commsType = agent && agent.commsType;
+    if (commsType === 'mqtt' && serverConfig.mqtt.enabled == 'true' && isTransportProtocolConnected('mqtt', false)) {
+        mqttTransport.publishMessage(command_topic, jwtToken);
+        return true;
+    }
+    return webSocketServer.sendDirect(agentId, jwtToken);
+}
+
 function sendEnrollment(agentId, token) {
     const message = {
         name: agentId,
@@ -120,4 +144,4 @@ function isTransportProtocolConnected(type,attemptReconnect){
     return connected;
 }
 
-module.exports = {pingAgent,pingAllAgents,sendCommand,sendEnrollment}
+module.exports = {pingAgent,pingAllAgents,sendCommand,sendEnrollment,sendRemoval}

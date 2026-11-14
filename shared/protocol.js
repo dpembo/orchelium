@@ -15,6 +15,7 @@ const COMMANDS = Object.freeze({
   TERMINATE_EXECUTION: 'terminateExecution',
   ENROLL: 'enroll',
   ROTATE_TOKEN: 'rotateToken',
+  REMOVED: 'removed',
 });
 
 const AGENT_CAPABILITIES = Object.freeze({

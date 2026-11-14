@@ -81,11 +81,15 @@ function supportsAgentToken(agent) {
 
 /**
  * Decide what a new WebSocket may do.
- * A valid token may replace the live socket. A connection without one is refused.
+ * A valid token for an approved agent may replace the live socket.
+ * A valid token for an agent that is still waiting is only a pending socket:
+ * it can be seen in the list, and it is not given work.
+ * A connection without a valid token is refused.
  */
-function decideConnection({ tokenValid }) {
-  if (tokenValid) return 'approve-replace';
-  return 'reject';
+function decideConnection({ agentStatus, tokenValid }) {
+  if (!tokenValid) return 'reject';
+  if (agentStatus && agentStatus !== 'register') return 'approve-replace';
+  return 'pending-accept';
 }
 
 function presentedTokenMatches(name, token) {

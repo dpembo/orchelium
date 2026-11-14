@@ -280,6 +280,7 @@ app.post('/agent-submit.html', validateCsrf, User.isAuthenticated, User.requireP
   var imageurl = req.body.imageurl;
 
   agents.registerAgent(name,description,command,imageurl,undefined,description);
+  webSocketServer.promotePending(name);
   const agentAuth = require('../communications/agentAuth');
   const agent = agents.getAgent(name);
   if (agentAuth.supportsAgentToken(agent)) {

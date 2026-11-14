@@ -2,7 +2,7 @@ const websocket = require('ws');
 const ReconnectingWebSocket = require('reconnecting-websocket');
 const { RetryBackoffManager } = require('./retry');
 const { publishStatusUpdate } = require('../publish');
-const { acceptFirstEnrollment } = require('../commands');
+const { acceptFirstEnrollment, markRemovedFromHub } = require('../commands');
 const runtime = require('../runtime');
 const { debug, DEBUG_LEVEL } = require('../log');
 
@@ -93,10 +93,16 @@ class WebSocketHandler {
         resolve(this.client);
       });
 
-      this.client.addEventListener('close', () => {
+      this.client.addEventListener('close', (event) => {
         if (generation !== this.connectionGeneration) return;
         this.isConnected = false;
         this.isConnecting = false;
+        if (runtime.removedByHub) return;
+        const code = event && (event.code || (event.detail && event.detail.code));
+        if (code === 4001) {
+          markRemovedFromHub();
+          return;
+        }
         if (!this.isReconnecting) {
           this.triggerReconnect();
         }
@@ -167,7 +173,7 @@ class WebSocketHandler {
   }
 
   triggerReconnect() {
-    if (this.isReconnecting) return;
+    if (runtime.removedByHub || this.isReconnecting) return;
 
     this.isReconnecting = true;
 

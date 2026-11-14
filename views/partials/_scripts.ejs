@@ -45,7 +45,7 @@
     {
    
       agent = JSON.parse(message);
-      var res= confirm("A new backup agent from [" + agent.server + "] has been connected, do you want to confugre this now?");
+      var res= confirm("A new agent from [" + agent.server + "] is waiting for approval. It cannot run jobs until you approve it. Configure it now?");
       if(res)goToRegister(message);
     }
     
